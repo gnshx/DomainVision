@@ -13,6 +13,7 @@ class CursedParticleSystem:
     def __init__(self, max_particles: int = 120):
         self.max_particles = max_particles
         self.particles: List[Dict] = []
+        self._glow_layer = None
 
     def spawn_particle(
         self,
@@ -88,7 +89,12 @@ class CursedParticleSystem:
                 self.spawn_particle(w, h, primary_color, secondary_color, mode=mode, center=center)
             )
 
-        glow_layer = np.zeros((h, w, 3), dtype=np.uint8)
+        # Pre-allocate or draw directly using fast additive blending
+        if self._glow_layer is None or self._glow_layer.shape[:2] != (h, w):
+            self._glow_layer = np.zeros((h, w, 3), dtype=np.uint8)
+        else:
+            self._glow_layer.fill(0)
+        glow_layer = self._glow_layer
         alive_particles = []
 
         for p in self.particles:
@@ -109,24 +115,36 @@ class CursedParticleSystem:
                 and 0 <= p["y"] < h
             ):
                 alive_particles.append(p)
-                # Render particle with glow
                 alpha = max(0.0, p["life"])
-                cur_color = (
-                    int(p["color"][0] * alpha),
-                    int(p["color"][1] * alpha),
-                    int(p["color"][2] * alpha),
-                )
+                r_core = max(1, int(p["size"]))
                 pt = (int(p["x"]), int(p["y"]))
-                radius = max(1, int(p["size"]))
-                # Core point
-                cv2.circle(glow_layer, pt, radius, cur_color, -1)
-                # Outer glow halo
-                cv2.circle(glow_layer, pt, radius + 2, cur_color, 1)
+
+                # Multi-halo glowing particle: inner white-hot core, middle vibrant, outer faint halo
+                c_outer = (
+                    int(p["color"][0] * alpha * 0.35),
+                    int(p["color"][1] * alpha * 0.35),
+                    int(p["color"][2] * alpha * 0.35),
+                )
+                c_mid = (
+                    int(p["color"][0] * alpha * 0.85),
+                    int(p["color"][1] * alpha * 0.85),
+                    int(p["color"][2] * alpha * 0.85),
+                )
+                c_core = (
+                    min(255, int(c_mid[0] + 80)),
+                    min(255, int(c_mid[1] + 80)),
+                    min(255, int(c_mid[2] + 80)),
+                )
+
+                # Outer soft halo
+                cv2.circle(glow_layer, pt, r_core + 4, c_outer, -1)
+                # Vibrant flame body
+                cv2.circle(glow_layer, pt, r_core + 1, c_mid, -1)
+                # Hot center
+                cv2.circle(glow_layer, pt, max(1, r_core - 1), c_core, -1)
 
         self.particles = alive_particles
 
-        # Blur glow layer and additively blend
-        blurred = cv2.GaussianBlur(glow_layer, (11, 11), 0)
-        out = cv2.add(frame, blurred)
-        out = cv2.add(out, glow_layer)
-        return out
+        # Direct additive blending without full-canvas blur overhead
+        return cv2.add(frame, glow_layer)
+

@@ -58,7 +58,9 @@ class BarrierShockwaveEffect:
             return frame
 
         h, w = frame.shape[:2]
-        canvas = np.zeros((h, w, 3), dtype=np.uint8)
+        # Fast downscaled bloom buffer (320x180)
+        dw, dh = w // 4, h // 4
+        bloom_canvas = np.zeros((dh, dw, 3), dtype=np.uint8)
         alive_rings = []
 
         for ring in self.rings:
@@ -72,10 +74,8 @@ class BarrierShockwaveEffect:
 
             if prog < 1.0:
                 alive_rings.append(ring)
-                # Expanding radius with ease-out cubic
                 ease = 1.0 - (1.0 - prog) ** 3
                 cur_r = int(ring["max_radius"] * ease)
-                # Alpha fades as ring expands
                 alpha = 1.0 - prog
                 col = (
                     int(ring["color"][0] * alpha),
@@ -83,14 +83,21 @@ class BarrierShockwaveEffect:
                     int(ring["color"][2] * alpha),
                 )
                 thick = max(1, int(ring["thickness"] * alpha))
-                cv2.circle(canvas, ring["center"], cur_r, col, thick)
+
+                # Draw sharp ring directly on frame
+                cv2.circle(frame, ring["center"], cur_r, col, thick)
+
+                # Draw downscaled ring for bloom
+                c_small = (ring["center"][0] // 4, ring["center"][1] // 4)
+                r_small = max(1, cur_r // 4)
+                t_small = max(1, thick // 2)
+                cv2.circle(bloom_canvas, c_small, r_small, col, t_small)
 
         self.rings = alive_rings
 
-        if np.count_nonzero(canvas) > 0:
-            blurred = cv2.GaussianBlur(canvas, (19, 19), 0)
-            out = cv2.add(frame, blurred)
-            out = cv2.add(out, canvas)
-            return out
+        if alive_rings:
+            blurred_small = cv2.GaussianBlur(bloom_canvas, (9, 9), 0)
+            bloom_full = cv2.resize(blurred_small, (w, h), interpolation=cv2.INTER_LINEAR)
+            frame = cv2.add(frame, bloom_full)
 
         return frame

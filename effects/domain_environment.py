@@ -57,21 +57,18 @@ class DomainEnvironmentRenderer:
         if pulse != 1.0:
             frame = cv2.convertScaleAbs(frame, alpha=pulse)
 
-        # Drifting cursed energy mist at the base (lower 30%)
+        # Drifting cursed energy mist at the base (vectorized)
         mist_h = int(self.h * 0.35)
         mist_y1 = self.h - mist_h
-        mist_layer = np.zeros((mist_h, self.w, 3), dtype=np.uint8)
         color = self.theme["primary_bgr"]
 
-        for y in range(mist_h):
-            fade = (y / float(mist_h)) ** 1.8
-            shift = math.sin((timer * 0.03) + (y * 0.08)) * 0.3
-            alpha = min(1.0, max(0.0, (fade + shift) * 0.45))
-            mist_layer[y, :] = (
-                int(color[0] * alpha),
-                int(color[1] * alpha),
-                int(color[2] * alpha),
-            )
+        y_arr = np.arange(mist_h, dtype=np.float32)
+        fade = (y_arr / float(mist_h)) ** 1.8
+        shift = np.sin((timer * 0.03) + (y_arr * 0.08)) * 0.3
+        alpha = np.clip((fade + shift) * 0.45, 0.0, 1.0)[:, None, None]
+        col_arr = np.array(color, dtype=np.float32).reshape(1, 1, 3)
+        mist_1col = (alpha * col_arr).astype(np.uint8)
+        mist_layer = np.repeat(mist_1col, self.w, axis=1)
 
         frame[mist_y1:, :] = cv2.add(frame[mist_y1:, :], mist_layer)
         return frame
