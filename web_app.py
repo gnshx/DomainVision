@@ -3,268 +3,507 @@ import io
 import os
 import sys
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+import urllib.parse
 import threading
 import cv2
 import numpy as np
 
 from main import DomainExpansionApp
+from utils.demo_feed import SyntheticDemoCamera
 
 
-# Global app instance and frame buffer
-current_frame_bytes = None
-frame_lock = threading.Lock()
-app_instance = None
+class CursedARWebServer:
+    def __init__(self, port: int = 8080):
+        self.port = port
+        self.app = DomainExpansionApp(
+            demo_mode=True,
+            theme="infinite_void",
+            headless=True,
+        )
+        self.demo_cam = SyntheticDemoCamera(width=640, height=480)
+        self.lock = threading.Lock()
+        self.last_action = None
+
+    def process_image(self, input_bgr: np.ndarray, action: str = "", theme: str = "") -> np.ndarray:
+        with self.lock:
+            if theme and theme != self.app.theme_name:
+                self.app.set_theme(theme)
+
+            if action == "expand":
+                self.app.trigger_domain()
+            elif action == "reset":
+                self.app.reset_domain()
+
+            return self.app.process_frame(input_bgr)
+
+    def process_demo_frame(self, action: str = "", theme: str = "") -> np.ndarray:
+        with self.lock:
+            if theme and theme != self.app.theme_name:
+                self.app.set_theme(theme)
+
+            if action == "expand":
+                self.app.trigger_domain()
+            elif action == "reset":
+                self.app.reset_domain()
+
+            ret, demo_raw = self.demo_cam.read()
+            if not ret or demo_raw is None:
+                self.demo_cam = SyntheticDemoCamera(width=640, height=480)
+                _, demo_raw = self.demo_cam.read()
+
+            return self.app.process_frame(demo_raw)
 
 
-class StreamingHandler(BaseHTTPRequestHandler):
+SERVER_INSTANCE = None
+
+
+class ARStreamHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Suppress noisy request logs to keep terminal readable
+        return
+
     def do_GET(self):
-        global current_frame_bytes, app_instance
+        global SERVER_INSTANCE
+        parsed = urllib.parse.urlparse(self.path)
+        params = urllib.parse.parse_qs(parsed.query)
 
-        if self.path == "/":
+        if parsed.path == "/":
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             html = """<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <meta charset="utf-8">
-    <title>Domain Expansion AR - Live Stream</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DomainVision - JJK AR Filter</title>
     <style>
+        :root {
+            --bg: #09060f;
+            --card-bg: rgba(22, 14, 38, 0.85);
+            --primary: #9d4edd;
+            --primary-glow: #c77dff;
+            --accent-blue: #00f0ff;
+            --accent-red: #ff0055;
+            --border: rgba(199, 125, 255, 0.25);
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            background: #0d0a14;
-            color: #f0edf6;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: #f1edfa;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans CJK JP", sans-serif;
             display: flex;
             flex-direction: column;
             align-items: center;
             padding: 24px 16px;
             min-height: 100vh;
         }
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
         h1 {
-            font-size: 28px;
-            font-weight: 800;
-            background: linear-gradient(135deg, #bd34fe, #41d1ff);
+            font-size: 32px;
+            font-weight: 900;
+            background: linear-gradient(135deg, #e0aaff, #c77dff, #00f0ff);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            margin-bottom: 8px;
-            letter-spacing: 1px;
+            letter-spacing: 2px;
+            text-shadow: 0 0 30px rgba(199, 125, 255, 0.4);
         }
         .subtitle {
             font-size: 14px;
-            color: #8b80a4;
-            margin-bottom: 20px;
+            color: #a497be;
+            margin-top: 4px;
         }
-        .stream-container {
+        .main-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.6), 0 0 30px rgba(157, 78, 221, 0.2);
+            backdrop-filter: blur(12px);
+            max-width: 680px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .source-tabs {
+            display: flex;
+            background: rgba(10, 6, 18, 0.8);
+            border-radius: 10px;
+            padding: 4px;
+            margin-bottom: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            width: 100%;
+            max-width: 420px;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 10px 16px;
+            border: none;
+            background: transparent;
+            color: #a497be;
+            font-size: 13px;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .tab-btn.active {
+            background: linear-gradient(135deg, #7b2cbf, #9d4edd);
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(157, 78, 221, 0.4);
+        }
+        .viewport {
             position: relative;
+            width: 640px;
+            height: 480px;
+            max-width: 100%;
             background: #000;
             border-radius: 12px;
             overflow: hidden;
-            box-shadow: 0 12px 36px rgba(189, 52, 254, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.1);
-            max-width: 640px;
-            width: 100%;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
-        .stream-container img {
-            display: block;
+        #output-canvas {
             width: 100%;
-            height: auto;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        #hidden-video {
+            display: none;
         }
         .controls {
             display: flex;
             flex-wrap: wrap;
-            gap: 12px;
-            margin-top: 24px;
+            gap: 10px;
+            margin-top: 18px;
             justify-content: center;
-            max-width: 640px;
+            width: 100%;
         }
-        button {
-            background: #1e172e;
-            color: #fff;
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            padding: 12px 20px;
+        .btn {
+            padding: 12px 18px;
             border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
             font-size: 14px;
-            font-weight: 600;
+            font-weight: 700;
             cursor: pointer;
             transition: all 0.2s ease;
+            color: #fff;
+            background: #1d142d;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
         }
-        button:hover {
+        .btn:hover {
             transform: translateY(-2px);
-            border-color: rgba(255, 255, 255, 0.4);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
         }
         .btn-expand {
-            background: linear-gradient(135deg, #7b1fa2, #ba68c8);
+            background: linear-gradient(135deg, #7209b7, #b5179e);
             border: none;
-            box-shadow: 0 4px 20px rgba(186, 104, 200, 0.4);
+            box-shadow: 0 4px 16px rgba(181, 23, 158, 0.5);
         }
         .btn-expand:hover {
-            background: linear-gradient(135deg, #8e24aa, #ce93d8);
-            box-shadow: 0 6px 24px rgba(186, 104, 200, 0.6);
+            background: linear-gradient(135deg, #9d4edd, #f72585);
+            box-shadow: 0 6px 22px rgba(247, 37, 133, 0.6);
         }
         .btn-sukuna {
-            background: linear-gradient(135deg, #b71c1c, #e53935);
+            background: linear-gradient(135deg, #990000, #d90429);
             border: none;
-            box-shadow: 0 4px 20px rgba(229, 57, 53, 0.4);
+            box-shadow: 0 4px 16px rgba(217, 4, 41, 0.4);
         }
         .btn-sukuna:hover {
-            background: linear-gradient(135deg, #c62828, #ef5350);
-            box-shadow: 0 6px 24px rgba(229, 57, 53, 0.6);
+            background: linear-gradient(135deg, #b00, #ef233c);
         }
         .btn-reset {
-            background: #2a2238;
+            background: #2b1f41;
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            margin-top: 14px;
+            font-size: 12px;
+            color: #9d8db8;
         }
         .status-badge {
-            margin-top: 16px;
-            font-size: 13px;
-            color: #10b981;
             display: flex;
             align-items: center;
             gap: 6px;
         }
-        .status-dot {
+        .dot {
             width: 8px;
             height: 8px;
             border-radius: 50%;
             background: #10b981;
-            animation: pulse 1.5s infinite;
+            box-shadow: 0 0 8px #10b981;
         }
-        @keyframes pulse {
-            0% { transform: scale(0.9); opacity: 0.8; }
-            50% { transform: scale(1.3); opacity: 1; }
-            100% { transform: scale(0.9); opacity: 0.8; }
+        .camera-msg {
+            position: absolute;
+            color: #fff;
+            text-align: center;
+            padding: 16px;
+            background: rgba(15, 10, 25, 0.9);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            display: none;
+            max-width: 80%;
         }
     </style>
 </head>
 <body>
-    <h1>領域展開 • DOMAIN EXPANSION</h1>
-    <div class="subtitle">Real-Time OpenCV + MediaPipe AR Stream</div>
-
-    <div class="stream-container">
-        <img src="/video_feed" alt="Domain Expansion Stream">
+    <div class="header">
+        <h1>領域展開 • DOMAIN EXPANSION</h1>
+        <div class="subtitle">Real-Time OpenCV + MediaPipe AR Filter</div>
     </div>
 
-    <div class="controls">
-        <button class="btn-expand" onclick="sendAction('/action?cmd=expand')">⚡ 領域展開 (Expand)</button>
-        <button onclick="sendAction('/action?cmd=infinite_void')">🌌 無量空処 (Infinite Void)</button>
-        <button class="btn-sukuna" onclick="sendAction('/action?cmd=malevolent_shrine')">🩸 伏魔御廚子 (Sukuna)</button>
-        <button class="btn-reset" onclick="sendAction('/action?cmd=reset')">🔄 Collapse / Reset</button>
+    <div class="main-card">
+        <div class="source-tabs">
+            <button class="tab-btn active" id="tab-webcam" onclick="setMode('webcam')">📷 My Local Webcam</button>
+            <button class="tab-btn" id="tab-demo" onclick="setMode('demo')">🤖 Animated Demo Feed</button>
+        </div>
+
+        <div class="viewport">
+            <img id="output-canvas" src="" alt="Domain Expansion Feed">
+            <div id="camera-notice" class="camera-msg">
+                <strong>Requesting camera permission...</strong><br>
+                <span style="font-size: 12px; color: #bbb;">Please allow camera access in your browser to use your own webcam over SSH.</span>
+            </div>
+            <video id="hidden-video" playsinline autoplay muted></video>
+        </div>
+
+        <div class="controls">
+            <button class="btn btn-expand" onclick="triggerAction('expand')">⚡ 領域展開 (Expand)</button>
+            <button class="btn" onclick="setTheme('infinite_void')">🌌 無量空処 (Infinite Void)</button>
+            <button class="btn btn-sukuna" onclick="setTheme('malevolent_shrine')">🩸 伏魔御廚子 (Sukuna)</button>
+            <button class="btn btn-reset" onclick="triggerAction('reset')">🔄 Reset Domain</button>
+            <button class="btn" onclick="saveSnapshot()">📸 Snapshot</button>
+        </div>
+
+        <div class="status-row">
+            <div class="status-badge">
+                <div class="dot" id="stream-dot"></div>
+                <span id="status-text">Connecting to Python pipeline...</span>
+            </div>
+            <div id="fps-counter">FPS: --</div>
+        </div>
     </div>
 
-    <div class="status-badge">
-        <div class="status-dot"></div> Live WebSocket / MJPEG Stream Active
-    </div>
+    <canvas id="offscreen-canvas" width="640" height="480" style="display: none;"></canvas>
 
     <script>
-        function sendAction(url) {
-            fetch(url).catch(console.error);
+        let mode = 'webcam'; // 'webcam' or 'demo'
+        let currentTheme = 'infinite_void';
+        let pendingAction = '';
+        let isProcessing = false;
+        let videoStream = null;
+
+        const video = document.getElementById('hidden-video');
+        const outputImg = document.getElementById('output-canvas');
+        const offCanvas = document.getElementById('offscreen-canvas');
+        const offCtx = offCanvas.getContext('2d');
+        const cameraNotice = document.getElementById('camera-notice');
+        const statusText = document.getElementById('status-text');
+        const fpsCounter = document.getElementById('fps-counter');
+
+        let frameCount = 0;
+        let lastFpsTime = performance.now();
+
+        async function initCamera() {
+            cameraNotice.style.display = 'block';
+            try {
+                videoStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" }
+                });
+                video.srcObject = videoStream;
+                await video.play();
+                cameraNotice.style.display = 'none';
+                statusText.innerText = "Live Webcam active. Bring hands together for Domain Expansion!";
+            } catch (err) {
+                console.warn("Could not access local webcam:", err);
+                cameraNotice.innerHTML = "<strong>Local webcam not accessible or denied.</strong><br>Switching automatically to Synthetic Demo Feed.";
+                setTimeout(() => {
+                    cameraNotice.style.display = 'none';
+                    setMode('demo');
+                }, 2000);
+            }
         }
+
+        function setMode(newMode) {
+            mode = newMode;
+            document.getElementById('tab-webcam').classList.toggle('active', mode === 'webcam');
+            document.getElementById('tab-demo').classList.toggle('active', mode === 'demo');
+
+            if (mode === 'webcam') {
+                if (!videoStream) initCamera();
+                statusText.innerText = "Local Webcam active.";
+            } else {
+                cameraNotice.style.display = 'none';
+                statusText.innerText = "Synthetic Demo Feed active (Looping animated Gojo).";
+            }
+        }
+
+        function triggerAction(action) {
+            pendingAction = action;
+        }
+
+        function setTheme(theme) {
+            currentTheme = theme;
+        }
+
+        function saveSnapshot() {
+            if (outputImg.src) {
+                const a = document.createElement('a');
+                a.href = outputImg.src;
+                a.download = `domain_expansion_${Date.now()}.jpg`;
+                a.click();
+            }
+        }
+
+        async function processLoop() {
+            if (!isProcessing) {
+                isProcessing = true;
+                const act = pendingAction;
+                pendingAction = '';
+
+                try {
+                    let response;
+                    if (mode === 'webcam' && video.readyState >= 2) {
+                        // Capture frame from user local webcam
+                        offCtx.drawImage(video, 0, 0, 640, 480);
+                        const blob = await new Promise(resolve => offCanvas.toBlob(resolve, 'image/jpeg', 0.82));
+                        
+                        response = await fetch(`/api/process_frame?theme=${currentTheme}&action=${act}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'image/jpeg' },
+                            body: blob
+                        });
+                    } else {
+                        // Demo mode
+                        response = await fetch(`/api/demo_frame?theme=${currentTheme}&action=${act}`);
+                    }
+
+                    if (response && response.ok) {
+                        const imgBlob = await response.blob();
+                        const oldUrl = outputImg.src;
+                        outputImg.src = URL.createObjectURL(imgBlob);
+                        if (oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
+
+                        frameCount++;
+                        const now = performance.now();
+                        if (now - lastFpsTime >= 1000) {
+                            const fps = ((frameCount * 1000) / (now - lastFpsTime)).toFixed(1);
+                            fpsCounter.innerText = `FPS: ${fps}`;
+                            frameCount = 0;
+                            lastFpsTime = now;
+                        }
+                    }
+                } catch (err) {
+                    // Ignore frame drop
+                } finally {
+                    isProcessing = false;
+                }
+            }
+            requestAnimationFrame(processLoop);
+        }
+
+        // Start webcam on load
+        initCamera();
+        requestAnimationFrame(processLoop);
     </script>
 </body>
 </html>"""
             self.wfile.write(html.encode("utf-8"))
 
-        elif self.path == "/video_feed":
-            self.send_response(200)
-            self.send_header("Age", "0")
-            self.send_header("Cache-Control", "no-cache, private")
-            self.send_header("Pragma", "no-cache")
-            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=FRAME")
-            self.end_headers()
+        elif parsed.path == "/api/demo_frame":
+            # Generate synthetic demo frame on server
+            action = params.get("action", [""])[0]
+            theme = params.get("theme", [""])[0]
+            out_frame = SERVER_INSTANCE.process_demo_frame(action=action, theme=theme)
+            ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
 
-            try:
-                while True:
-                    with frame_lock:
-                        frame_data = current_frame_bytes
+            if ret:
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(buf)))
+                self.end_headers()
+                self.wfile.write(buf.tobytes())
+            else:
+                self.send_error(500)
 
-                    if frame_data is not None:
-                        self.wfile.write(b"--FRAME\r\n")
-                        self.send_header("Content-Type", "image/jpeg")
-                        self.send_header("Content-Length", str(len(frame_data)))
-                        self.end_headers()
-                        self.wfile.write(frame_data)
-                        self.wfile.write(b"\r\n")
-                    time.sleep(0.033)  # ~30 FPS
-            except Exception:
-                pass
+        else:
+            self.send_error(404)
 
-        elif self.path.startswith("/action"):
-            cmd = self.path.split("cmd=")[-1] if "cmd=" in self.path else ""
-            if app_instance:
-                if cmd == "expand":
-                    app_instance.trigger_domain()
-                elif cmd == "reset":
-                    app_instance.reset_domain()
-                elif cmd == "infinite_void":
-                    app_instance.set_theme("infinite_void")
-                elif cmd == "malevolent_shrine":
-                    app_instance.set_theme("malevolent_shrine")
+    def do_POST(self):
+        global SERVER_INSTANCE
+        parsed = urllib.parse.urlparse(self.path)
+        params = urllib.parse.parse_qs(parsed.query)
 
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"OK")
+        if parsed.path == "/api/process_frame":
+            content_len = int(self.headers.get("Content-Length", 0))
+            if content_len <= 0:
+                self.send_error(400)
+                return
+
+            raw_bytes = self.rfile.read(content_len)
+            nparr = np.frombuffer(raw_bytes, np.uint8)
+            input_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+            if input_bgr is None:
+                self.send_error(400)
+                return
+
+            action = params.get("action", [""])[0]
+            theme = params.get("theme", [""])[0]
+            out_frame = SERVER_INSTANCE.process_image(input_bgr, action=action, theme=theme)
+
+            ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ret:
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(buf)))
+                self.end_headers()
+                self.wfile.write(buf.tobytes())
+            else:
+                self.send_error(500)
         else:
             self.send_error(404)
 
 
-def video_processing_thread(app: DomainExpansionApp):
-    global current_frame_bytes
-    print("Video processing thread started.")
-    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
-
-    while app.cap.isOpened():
-        ret, raw_frame = app.cap.read()
-        if not ret or raw_frame is None:
-            if app.is_demo:
-                continue
-            else:
-                break
-
-        output_frame = app.process_frame(raw_frame)
-        ret, buffer = cv2.imencode(".jpg", output_frame, encode_param)
-        if ret:
-            with frame_lock:
-                current_frame_bytes = buffer.tobytes()
-
-        time.sleep(0.015)
-
-
 def main():
-    global app_instance
-    parser = argparse.ArgumentParser(description="Live Web Streamer for Domain Expansion AR")
-    parser.add_argument("--port", type=int, default=8080, help="Web server port (default: 8080)")
-    parser.add_argument("--camera", type=int, default=0, help="Camera index")
-    parser.add_argument("--demo", action="store_true", help="Force demo mode")
-    parser.add_argument("--theme", type=str, default="infinite_void", help="Theme")
+    global SERVER_INSTANCE
+    parser = argparse.ArgumentParser(description="DomainVision Web Streamer")
+    parser.add_argument("--port", type=int, default=8080, help="Port (default: 8080)")
     args = parser.parse_args()
 
-    app_instance = DomainExpansionApp(
-        camera_idx=args.camera,
-        demo_mode=args.demo,
-        theme=args.theme,
-        headless=True,
-    )
-
-    t = threading.Thread(target=video_processing_thread, args=(app_instance,), daemon=True)
-    t.start()
-
+    SERVER_INSTANCE = CursedARWebServer(port=args.port)
     server_address = ("0.0.0.0", args.port)
-    httpd = HTTPServer(server_address, StreamingHandler)
+    httpd = ThreadingHTTPServer(server_address, ARStreamHandler)
+
     print("\n=======================================================")
-    print(f"  DOMAIN EXPANSION AR - LIVE WEB STREAM ACTIVE!")
+    print(f"  DOMAINVISION AR WEB SERVER STARTED!")
     print(f"  URL: http://localhost:{args.port}/")
-    print(f"  (In VS Code Remote-SSH, open the Ports tab to view)")
+    print(f"  - Use 'My Local Webcam' tab to use your laptop webcam!")
+    print(f"  - Use 'Animated Demo Feed' tab to watch Gojo!")
+    print(f"  - Press Ctrl+C in terminal to stop.")
     print("=======================================================\n")
 
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("Stopping web server...")
+        print("\nShutting down web server...")
     finally:
         httpd.server_close()
-        app_instance.cleanup()
+        if hasattr(SERVER_INSTANCE.app, "cleanup"):
+            SERVER_INSTANCE.app.cleanup()
+        print("Shutdown complete.")
 
 
 if __name__ == "__main__":
