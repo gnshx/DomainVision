@@ -1,10 +1,18 @@
 # DomainVision Configuration
 
 # Video & Processing Resolution
-CAMERA_WIDTH = 640
-CAMERA_HEIGHT = 480
-PROCESS_WIDTH = 640
-PROCESS_HEIGHT = 480
+CAMERA_WIDTH = 1280
+CAMERA_HEIGHT = 720
+PROCESS_WIDTH = 1280
+PROCESS_HEIGHT = 720
+
+# MediaPipe Async Tracking Resolution (downscaled for high FPS)
+TRACK_WIDTH = 640
+TRACK_HEIGHT = 360
+
+# Segmentation Optimization
+# Run selfie segmentation every N frames and reuse/smooth mask
+SEGMENTATION_INTERVAL = 3
 
 # Landmark Smoothing (Exponential Moving Average)
 # 0.0 = freeze, 1.0 = raw (no smoothing). 0.35-0.45 provides smooth tracking without lag.
@@ -19,7 +27,19 @@ FINGER_CURLED_ANGLE = 105.0
 # Gesture Recognition
 # Number of consecutive frames the user must hold the canonical sign to activate
 SIGN_HOLD_FRAMES_REQUIRED = 12
-SIGN_CONFIDENCE_THRESHOLD = 0.82
+SIGN_CONFIDENCE_THRESHOLD = 0.78
+
+# Frame-Accurate Canonical JJK Audio Timeline (seconds)
+AUDIO_TIMELINE = {
+    "sign_recognized": 0.00,
+    "charge": 0.05,
+    "energy_build": 0.70,
+    "voice": 1.20,
+    "flash": 1.35,
+    "shockwave": 1.40,
+    "domain_env": 1.50,
+    "ambience": 1.50,
+}
 
 # Domain Themes Configuration
 THEMES = {

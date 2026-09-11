@@ -95,13 +95,30 @@ class AdvancedHandTracker:
         palm_x = int((smoothed_2d[0][0] + smoothed_2d[5][0] + smoothed_2d[17][0]) / 3.0)
         palm_y = int((smoothed_2d[0][1] + smoothed_2d[5][1] + smoothed_2d[17][1]) / 3.0)
         palm_center = (palm_x, palm_y)
-        palm_scale = math.dist(smoothed_2d[0], smoothed_2d[9])  # wrist to middle MCP distance
+        palm_scale = max(10.0, math.dist(smoothed_2d[0], smoothed_2d[9]))  # wrist to middle MCP distance
 
-        # Hand direction vector (wrist to middle MCP)
+        # Hand direction vector / Wrist orientation (wrist to middle MCP)
         dir_x = smoothed_2d[9][0] - smoothed_2d[0][0]
         dir_y = smoothed_2d[9][1] - smoothed_2d[0][1]
         dir_len = math.hypot(dir_x, dir_y) + 1e-5
         pointing_dir = (dir_x / dir_len, dir_y / dir_len)
+        wrist_orientation = pointing_dir
+
+        # Inter-finger distances (normalized by palm scale)
+        inter_finger_dists = {
+            "thumb_to_index": math.dist(smoothed_2d[4], smoothed_2d[8]) / palm_scale,
+            "index_to_middle": math.dist(smoothed_2d[8], smoothed_2d[12]) / palm_scale,
+            "middle_to_ring": math.dist(smoothed_2d[12], smoothed_2d[16]) / palm_scale,
+            "ring_to_pinky": math.dist(smoothed_2d[16], smoothed_2d[20]) / palm_scale,
+            "thumb_to_pinky": math.dist(smoothed_2d[4], smoothed_2d[20]) / palm_scale,
+        }
+
+        # 3D Palm normal vector: cross product of (wrist->middle_mcp) and (pinky_mcp->index_mcp)
+        v_long = np.array([points_3d[9][0] - points_3d[0][0], points_3d[9][1] - points_3d[0][1], points_3d[9][2] - points_3d[0][2]], dtype=np.float32)
+        v_lat = np.array([points_3d[5][0] - points_3d[17][0], points_3d[5][1] - points_3d[17][1], points_3d[5][2] - points_3d[17][2]], dtype=np.float32)
+        norm_v = np.cross(v_long, v_lat)
+        norm_len = np.linalg.norm(norm_v) + 1e-6
+        palm_normal = (float(norm_v[0] / norm_len), float(norm_v[1] / norm_len), float(norm_v[2] / norm_len))
 
         return {
             "landmarks": smoothed_2d,
@@ -109,6 +126,9 @@ class AdvancedHandTracker:
             "palm_center": palm_center,
             "palm_scale": palm_scale,
             "pointing_dir": pointing_dir,
+            "wrist_orientation": wrist_orientation,
+            "palm_normal": palm_normal,
+            "inter_finger_dists": inter_finger_dists,
             "finger_states": finger_states,
             "finger_angles": finger_angles,
             "wrist": smoothed_2d[0],

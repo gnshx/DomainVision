@@ -1,18 +1,26 @@
 import os
+import time
+import threading
+import queue
 from typing import Dict, Any, Optional, Tuple, List
 import cv2
 import numpy as np
 import mediapipe as mp
 from mediapipe.tasks.python import vision, BaseOptions
+
+from config import TRACK_WIDTH, TRACK_HEIGHT, SEGMENTATION_INTERVAL
 from tracking.hand_tracker import AdvancedHandTracker
 
 
 class MediaPipeVisionTracker:
     """
-    Unified MediaPipe Tasks tracker:
-    - Person / Selfie Segmentation
-    - Dual Hand Landmark Tracking
-    - Body Pose Tracking
+    Decoupled Asynchronous Vision Tracker:
+    - Dedicated worker thread processes MediaPipe models independently of camera loop
+    - 1-item buffer drops stale frames automatically to eliminate latency
+    - Downscaled 640x360 tracking resolution for high FPS
+    - Selfie segmentation updated every N frames (mask reused & smoothly interpolated)
+    - Disables heavy PoseLandmarker by default to preserve CPU/GPU headroom
+    - Provides non-blocking get_latest_tracking() for instantaneous display rendering
     """
 
     def __init__(
@@ -20,17 +28,48 @@ class MediaPipeVisionTracker:
         models_dir: str = "assets/models",
         enable_segmenter: bool = True,
         enable_hands: bool = True,
-        enable_pose: bool = True,
+        enable_pose: bool = False,
+        track_width: int = TRACK_WIDTH,
+        track_height: int = TRACK_HEIGHT,
+        seg_interval: int = SEGMENTATION_INTERVAL,
+        async_mode: bool = True,
     ):
         self.models_dir = models_dir
+        self.track_w = track_width
+        self.track_h = track_height
+        self.seg_interval = max(1, seg_interval)
+        self.async_mode = async_mode
 
         self.segmenter = None
         self.hand_landmarker = None
         self.pose_landmarker = None
         self.hand_analyzer = AdvancedHandTracker()
 
+        self._init_models(enable_segmenter, enable_hands, enable_pose)
+
+        # Threading state
+        self._lock = threading.Lock()
+        self._frame_slot: Optional[Tuple[np.ndarray, Tuple[int, int]]] = None
+        self._frame_available = threading.Event()
+        self._stop_event = threading.Event()
+        self._worker_thread: Optional[threading.Thread] = None
+
+        # Cached tracking state
+        self._latest_result: Dict[str, Any] = {
+            "mask": None,
+            "hands": [],
+            "pose": None,
+            "track_ms": 0.0,
+        }
+        self._frame_counter = 0
+        self._cached_mask: Optional[np.ndarray] = None
+
+        if self.async_mode:
+            self._start_worker()
+
+    def _init_models(self, enable_segmenter: bool, enable_hands: bool, enable_pose: bool):
         if enable_segmenter:
-            seg_path = os.path.join(models_dir, "selfie_segmenter.tflite")
+            seg_path = os.path.join(self.models_dir, "selfie_segmenter.tflite")
             if os.path.exists(seg_path):
                 options = vision.ImageSegmenterOptions(
                     base_options=BaseOptions(model_asset_path=seg_path),
@@ -39,19 +78,19 @@ class MediaPipeVisionTracker:
                 self.segmenter = vision.ImageSegmenter.create_from_options(options)
 
         if enable_hands:
-            hand_path = os.path.join(models_dir, "hand_landmarker.task")
+            hand_path = os.path.join(self.models_dir, "hand_landmarker.task")
             if os.path.exists(hand_path):
                 hand_opts = vision.HandLandmarkerOptions(
                     base_options=BaseOptions(model_asset_path=hand_path),
                     num_hands=2,
-                    min_hand_detection_confidence=0.4,
-                    min_hand_presence_confidence=0.4,
-                    min_tracking_confidence=0.4,
+                    min_hand_detection_confidence=0.38,
+                    min_hand_presence_confidence=0.38,
+                    min_tracking_confidence=0.38,
                 )
                 self.hand_landmarker = vision.HandLandmarker.create_from_options(hand_opts)
 
         if enable_pose:
-            pose_path = os.path.join(models_dir, "pose_landmarker.task")
+            pose_path = os.path.join(self.models_dir, "pose_landmarker.task")
             if os.path.exists(pose_path):
                 pose_opts = vision.PoseLandmarkerOptions(
                     base_options=BaseOptions(model_asset_path=pose_path),
@@ -61,68 +100,140 @@ class MediaPipeVisionTracker:
                 )
                 self.pose_landmarker = vision.PoseLandmarker.create_from_options(pose_opts)
 
+    def _start_worker(self):
+        self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+        self._worker_thread.start()
+
+    def _worker_loop(self):
+        while not self._stop_event.is_set():
+            if not self._frame_available.wait(timeout=0.05):
+                continue
+
+            with self._lock:
+                if self._frame_slot is None:
+                    self._frame_available.clear()
+                    continue
+                frame_bgr, orig_shape = self._frame_slot
+                self._frame_slot = None
+                self._frame_available.clear()
+
+            # Execute tracking on downscaled frame
+            t0 = time.time()
+            result = self._process_internal(frame_bgr, orig_shape)
+            dt_ms = (time.time() - t0) * 1000.0
+            result["track_ms"] = dt_ms
+
+            with self._lock:
+                self._latest_result = result
+
+    def push_frame(self, frame_bgr: np.ndarray):
+        """
+        Push new camera frame to async worker.
+        If worker is busy, overwrites older frame (frame dropping) to prevent latency.
+        """
+        orig_shape = frame_bgr.shape[:2]
+        with self._lock:
+            self._frame_slot = (frame_bgr, orig_shape)
+            self._frame_available.set()
+
+    def get_latest_tracking(self, frame_shape: Tuple[int, int]) -> Dict[str, Any]:
+        """
+        Non-blocking fetch of latest tracking state.
+        Ensures mask matches requested frame shape.
+        """
+        with self._lock:
+            res = self._latest_result.copy()
+
+        h, w = frame_shape[:2]
+        mask = res.get("mask")
+        if mask is None:
+            res["mask"] = np.zeros((h, w), dtype=np.uint8)
+        elif mask.shape[:2] != (h, w):
+            res["mask"] = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
+
+        return res
+
     def process(self, frame_bgr: np.ndarray) -> Dict[str, Any]:
         """
-        Process a BGR video frame and return:
-        - mask: uint8 person segmentation mask (h, w), values 0 to 255
-        - hands: list of hand dictionaries with landmarks, palm_center, etc.
-        - pose: pose landmarks dictionary
+        Unified synchronous / asynchronous interface.
+        In async mode, pushes frame and returns latest cached result immediately.
+        In sync mode, runs immediately.
         """
         h, w = frame_bgr.shape[:2]
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        if self.async_mode:
+            self.push_frame(frame_bgr)
+            return self.get_latest_tracking((h, w))
+        else:
+            return self._process_internal(frame_bgr, (h, w))
+
+    def _process_internal(self, frame_bgr: np.ndarray, orig_shape: Tuple[int, int]) -> Dict[str, Any]:
+        orig_h, orig_w = orig_shape
+        self._frame_counter += 1
+
+        # Downscale for tracking
+        if frame_bgr.shape[1] != self.track_w or frame_bgr.shape[0] != self.track_h:
+            track_frame = cv2.resize(frame_bgr, (self.track_w, self.track_h), interpolation=cv2.INTER_AREA)
+        else:
+            track_frame = frame_bgr
+
+        frame_rgb = cv2.cvtColor(track_frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
         result: Dict[str, Any] = {
-            "mask": np.zeros((h, w), dtype=np.uint8),
+            "mask": None,
             "hands": [],
             "pose": None,
         }
 
-        # 1. Person Segmentation
-        if self.segmenter is not None:
+        # 1. Person Segmentation (Executed every N frames, cached otherwise)
+        should_run_seg = (self.segmenter is not None) and (
+            self._cached_mask is None or (self._frame_counter % self.seg_interval == 0)
+        )
+
+        if should_run_seg:
             try:
                 seg_res = self.segmenter.segment(mp_image)
                 if seg_res and seg_res.confidence_masks:
                     conf = seg_res.confidence_masks[0].numpy_view().squeeze()
-                    mask_uint8 = np.clip(conf * 255.0, 0, 255).astype(np.uint8)
-                    if mask_uint8.shape != (h, w):
-                        mask_uint8 = cv2.resize(mask_uint8, (w, h), interpolation=cv2.INTER_LINEAR)
-                    result["mask"] = mask_uint8
+                    mask_down = np.clip(conf * 255.0, 0, 255).astype(np.uint8)
+                    # Upscale mask to full original resolution
+                    mask_full = cv2.resize(mask_down, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+                    self._cached_mask = mask_full
             except Exception:
                 pass
 
-        # 2. Hand Tracking
+        if self._cached_mask is not None:
+            result["mask"] = self._cached_mask
+        else:
+            result["mask"] = np.zeros((orig_h, orig_w), dtype=np.uint8)
+
+        # 2. Hand Tracking on downscaled frame, mapped back to original resolution
         if self.hand_landmarker is not None:
             try:
                 hand_res = self.hand_landmarker.detect(mp_image)
                 if hand_res and hand_res.hand_landmarks:
                     for idx, hand_lms in enumerate(hand_res.hand_landmarks):
-                        analyzed = self.hand_analyzer.analyze_hand(hand_lms, (h, w), hand_idx=idx)
+                        analyzed = self.hand_analyzer.analyze_hand(
+                            hand_lms, (orig_h, orig_w), hand_idx=idx
+                        )
                         result["hands"].append(analyzed)
                 else:
                     self.hand_analyzer.reset()
             except Exception:
                 pass
 
-        # 3. Pose Tracking
+        # 3. Optional Pose Tracking
         if self.pose_landmarker is not None:
             try:
                 pose_res = self.pose_landmarker.detect(mp_image)
                 if pose_res and pose_res.pose_landmarks:
                     lms = pose_res.pose_landmarks[0]
-                    coords = [(int(lm.x * w), int(lm.y * h)) for lm in lms]
-                    # Landmark indices:
-                    # 11: left_shoulder, 12: right_shoulder
-                    # 13: left_elbow, 14: right_elbow
-                    # 15: left_wrist, 16: right_wrist
-                    # 0: nose
+                    coords = [(int(lm.x * orig_w), int(lm.y * orig_h)) for lm in lms]
                     result["pose"] = {
                         "landmarks": coords,
-                        "nose": coords[0] if len(coords) > 0 else (w // 2, h // 4),
+                        "nose": coords[0] if len(coords) > 0 else (orig_w // 2, orig_h // 4),
                         "left_shoulder": coords[11] if len(coords) > 11 else None,
                         "right_shoulder": coords[12] if len(coords) > 12 else None,
-                        "left_elbow": coords[13] if len(coords) > 13 else None,
-                        "right_elbow": coords[14] if len(coords) > 14 else None,
                         "left_wrist": coords[15] if len(coords) > 15 else None,
                         "right_wrist": coords[16] if len(coords) > 16 else None,
                     }
@@ -132,9 +243,23 @@ class MediaPipeVisionTracker:
         return result
 
     def close(self):
+        self._stop_event.set()
+        self._frame_available.set()
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=0.8)
+
         if self.segmenter:
-            self.segmenter.close()
+            try:
+                self.segmenter.close()
+            except Exception:
+                pass
         if self.hand_landmarker:
-            self.hand_landmarker.close()
+            try:
+                self.hand_landmarker.close()
+            except Exception:
+                pass
         if self.pose_landmarker:
-            self.pose_landmarker.close()
+            try:
+                self.pose_landmarker.close()
+            except Exception:
+                pass
