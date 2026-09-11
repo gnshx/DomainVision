@@ -3,7 +3,8 @@ import math
 import os
 import sys
 import time
-from typing import Optional, Tuple, Dict, Any
+from collections import deque
+from typing import Optional, Tuple, Dict, Any, List
 import cv2
 import numpy as np
 
@@ -15,21 +16,72 @@ from config import (
     SIGN_HOLD_FRAMES_REQUIRED,
     SIGN_CONFIDENCE_THRESHOLD,
     AUDIO_TIMELINE,
+    QUALITY_PROMOTE_FPS,
+    QUALITY_DEMOTE_FPS,
+    QUALITY_LEVELS,
+    QUALITY_BUDGETS,
 )
 from tracking.detector import MediaPipeVisionTracker
 from tracking.gesture_recognizer import CanonicalGestureRecognizer
 from tracking.hand_tracker import generate_synthetic_mudra_hands
 from effects.flash import DomainFlashEffect
 from effects.domain_environment import DomainEnvironmentRenderer
+from effects.domain_layers import DomainLayerRenderer
 from effects.aura import CursedAuraEffect
 from effects.cursed_energy import CursedEnergyEffect
 from effects.particles import CursedParticleSystem
 from effects.distortion import OpticalDistortionEffect
 from effects.shockwave import BarrierShockwaveEffect
+from effects.color_grade import CinematicColorGrader
 from utils.text_renderer import JapaneseTextRenderer
+from utils.motion_estimator import CameraMotionEstimator
 from audio.audio_manager import AudioManager
 from utils.demo_feed import SyntheticDemoCamera
 from utils.fps import PerformanceProfiler
+
+
+class AdaptiveQualityController:
+    """
+    Measures rolling FPS and upgrades/demotes effect quality level with hysteresis.
+    - Upgrades quality when rolling FPS >= QUALITY_PROMOTE_FPS for 20 consecutive frames
+    - Demotes quality when rolling FPS < QUALITY_DEMOTE_FPS for 5 consecutive frames
+    This prevents thrashing while responding quickly to sustained FPS drops.
+    """
+
+    def __init__(self, initial_level: str = "HIGH", window: int = 20):
+        self.level = initial_level
+        self._fps_window: deque = deque(maxlen=window)
+        self._promote_streak = 0
+        self._demote_streak = 0
+        self._promote_required = window
+        self._demote_required = 5
+
+    def update(self, fps: float) -> Dict[str, Any]:
+        """Call once per frame with current FPS. Returns current quality budget."""
+        self._fps_window.append(fps)
+        avg_fps = sum(self._fps_window) / len(self._fps_window)
+
+        idx = QUALITY_LEVELS.index(self.level)
+
+        if avg_fps >= QUALITY_PROMOTE_FPS:
+            self._demote_streak = 0
+            self._promote_streak += 1
+            if self._promote_streak >= self._promote_required and idx < len(QUALITY_LEVELS) - 1:
+                self.level = QUALITY_LEVELS[idx + 1]
+                self._promote_streak = 0
+        elif avg_fps < QUALITY_DEMOTE_FPS:
+            self._promote_streak = 0
+            self._demote_streak += 1
+            if self._demote_streak >= self._demote_required and idx > 0:
+                self.level = QUALITY_LEVELS[idx - 1]
+                self._demote_streak = 0
+        else:
+            # In hysteresis band — reset streaks but don't change level
+            self._promote_streak = max(0, self._promote_streak - 1)
+            self._demote_streak = max(0, self._demote_streak - 1)
+
+        return QUALITY_BUDGETS[self.level]
+
 
 
 class DomainExpansionApp:
@@ -103,6 +155,18 @@ class DomainExpansionApp:
         self.shockwave_fx = BarrierShockwaveEffect()
         self.text_renderer = JapaneseTextRenderer()
 
+        # 2.5D Parallax Domain Layer Renderer (replaces flat environment for active states)
+        self.domain_layers = DomainLayerRenderer(width=self.w, height=self.h, theme=self.theme_name)
+
+        # Cinematic Color Grader (bloom, vignette, color spill, chromatic aberration)
+        self.color_grader = CinematicColorGrader(width=self.w, height=self.h)
+
+        # Camera motion estimator (sparse optical flow, < 1.5ms)
+        self.motion_estimator = CameraMotionEstimator()
+
+        # Adaptive quality controller (starts at HIGH, auto-scales based on FPS)
+        self.quality_ctrl = AdaptiveQualityController(initial_level="HIGH")
+
         # Picture-in-Picture camera capture for bottom display during animated feed
         self.camera_idx = camera_idx
         self.pip_cap = None
@@ -156,6 +220,7 @@ class DomainExpansionApp:
         if theme_name in THEMES:
             self.theme_name = theme_name
             self.env_renderer.set_theme(theme_name)
+            self.domain_layers.set_theme(theme_name)
             print(f"Switched theme to: {self.theme_name} ({THEMES[theme_name]['name_ja']})")
 
     def trigger_domain(self):
@@ -330,10 +395,20 @@ class DomainExpansionApp:
         # Advance Timeline State Machine
         self._update_timeline_state_machine(gesture_info)
 
-        # 3. Environment Generation (Shrine / Void)
+        # --- Quality controller: measure FPS, get budget for this frame ---
+        q_budget = self.quality_ctrl.update(self.profiler.fps if self.profiler.fps > 0 else 30.0)
+        q_max_particles = q_budget["max_particles"]
+        q_distortion    = q_budget["distortion"]
+        q_aura_scale    = q_budget["aura_scale"]
+
+        # Camera motion estimation (used for parallax; minimal cost at 160x90)
+        cam_dx, cam_dy = self.motion_estimator.estimate(raw_frame)
+
+        # 3. Environment Generation (Parallax Shrine / Void with depth layers)
         now = time.time()
         if self.state in ["DOMAIN_ACTIVE", "EXPANSION", "COLLAPSE"]:
-            domain_bg = self.env_renderer.render(timer=self.total_frames)
+            # Use 2.5D parallax renderer for active domain states
+            domain_bg = self.domain_layers.render(timer=self.total_frames, cam_dx=cam_dx, cam_dy=cam_dy)
 
             if self.state == "EXPANSION":
                 prog = min(1.0, (now - self.state_start_time) / 1.2)
@@ -354,7 +429,7 @@ class DomainExpansionApp:
         else:
             active_bg = raw_frame.copy()
 
-        # 4. Optimized Cursed Aura & Silhouette Compositing
+        # 4. Edge-Aware 3-Layer Cursed Aura & Silhouette Compositing
         if self.state in ["DOMAIN_ACTIVE", "EXPANSION", "COLLAPSE"]:
             aura_intensity = 1.0 if self.state != "COLLAPSE" else max(0.0, 1.0 - (now - self.state_start_time) / 0.9)
             composited = self.aura_fx.composite_with_aura(
@@ -365,6 +440,7 @@ class DomainExpansionApp:
                 secondary_color=col_sec,
                 timer=self.total_frames,
                 aura_intensity=aura_intensity,
+                aura_scale=q_aura_scale,
             )
         elif self.state == "CHARGING":
             elapsed = now - self.seq_start_time
@@ -377,11 +453,12 @@ class DomainExpansionApp:
                 secondary_color=col_sec,
                 timer=self.total_frames,
                 aura_intensity=intensity,
+                aura_scale=q_aura_scale,
             )
         else:
             composited = raw_frame.copy()
 
-        # 5. Cursed Particles System
+        # 5. Cursed Particles System (depth-aware, hand-attractor, quality-gated)
         p_mode = "float"
         p_intensity = 0.0
         if self.state == "CHARGING":
@@ -395,6 +472,11 @@ class DomainExpansionApp:
             p_intensity = 1.0
 
         if p_intensity > 0.01:
+            # Build hand attractor list from palm centers of tracked hands
+            hand_attractors = None
+            if hands:
+                hand_attractors = [h.get("palm_center", self.energy_center) for h in hands]
+
             composited = self.particle_system.update_and_render(
                 composited,
                 primary_color=col_pri,
@@ -402,6 +484,8 @@ class DomainExpansionApp:
                 mode=p_mode,
                 center=self.energy_center,
                 intensity=p_intensity,
+                max_particles=q_max_particles,
+                hand_attractors=hand_attractors,
             )
 
         # 6. Perspective Hand Cursed Energy (Attached to 21 Finger Joints)
@@ -423,8 +507,12 @@ class DomainExpansionApp:
         if self.flash_fx.active:
             composited, _ = self.flash_fx.apply(composited)
 
-        # 9. Optical Distortion & Screen Shake
-        composited = self.distortion_fx.apply(composited)
+        # 9. Optical Distortion & Screen Shake (quality-gated)
+        if q_distortion:
+            composited = self.distortion_fx.apply(composited)
+        elif self.distortion_fx.shake_magnitude > 0.5:
+            # Still allow screen shake even in low quality — it's very cheap
+            composited = self.distortion_fx.apply(composited)
 
         # 10. Japanese Domain Calligraphy Banner Overlay
         if self.state in ["EXPANSION", "DOMAIN_ACTIVE"]:
@@ -459,10 +547,32 @@ class DomainExpansionApp:
                     p2 = cv2.bitwise_and(roi_c, roi_c, mask=mask_inv)
                     composited[y1:y2, :] = cv2.add(p1, p2)
 
+        # 10.5 Cinematic Color Grading (bloom, vignette, color spill, chromatic aberration)
+        # Only applied in active domain states to preserve NORMAL/CHARGING performance
+        if self.state in ["DOMAIN_ACTIVE", "EXPANSION", "COLLAPSE", "CHARGING"]:
+            # Chromatic aberration active during FLASH and brief SHOCKWAVE period
+            chroma_mag = 0.0
+            if self.state in ["FLASH", "SHOCKWAVE"] or (self.state == "EXPANSION" and (now - self.state_start_time) < 0.4):
+                chroma_mag = 3.0
+
+            composited = self.color_grader.apply(
+                composited,
+                person_mask=person_mask,
+                domain_color=col_pri,
+                timer=self.total_frames,
+                apply_spill=(self.state in ["DOMAIN_ACTIVE", "EXPANSION"]),
+                apply_bloom=(self.state in ["DOMAIN_ACTIVE", "EXPANSION", "CHARGING"]),
+                apply_vignette=True,
+                chromatic_magnitude=chroma_mag,
+                spill_strength=0.14,
+                bloom_strength=0.35,
+                bloom_threshold=200,
+            )
+
         # 11. Sleek HUD & Performance Telemetry (Crystal Clear Visibility)
         self.profiler.end_rendering()
         if self.show_hud:
-            self._render_hud(composited, gesture_info)
+            self._render_hud(composited, gesture_info, q_level=self.quality_ctrl.level)
 
         # 12. Show User Camera Display in Bottom during Animated Feed
         if self.is_demo:
@@ -511,10 +621,10 @@ class DomainExpansionApp:
         cv2.putText(frame, "YOUR LIVE CAM DISPLAY", (x1 + 22, y1 + 15),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.34, (255, 255, 255), 1, cv2.LINE_AA)
 
-    def _render_hud(self, frame: np.ndarray, gesture_info: dict):
+    def _render_hud(self, frame: np.ndarray, gesture_info: dict, q_level: str = "HIGH"):
         """Renders anime-styled cyber/curse telemetry HUD with crystal-clear visibility."""
         h, w = frame.shape[:2]
-        hud_w, hud_h = 365, 134
+        hud_w, hud_h = 380, 140
         # ROI alpha blending - avoids copying entire 1280x720 frame
         roi = frame[16:16 + hud_h, 16:16 + hud_w]
         dark_card = np.full_like(roi, (12, 8, 18))
@@ -550,9 +660,15 @@ class DomainExpansionApp:
             cv2.rectangle(frame, (26, 90), (26 + fill_w, 100), fill_col, -1)
 
         # Prominent In-HUD Telemetry Line (Never overshadowed or hidden)
-        fps_color = (80, 255, 120) if self.profiler.fps >= 25.0 else ((80, 230, 255) if self.profiler.fps >= 15.0 else (80, 80, 255))
-        cv2.putText(frame, f"PERF   : {self.profiler.fps:.1f} FPS  |  Track: {self.profiler.track_ms:.0f}ms  |  Render: {self.profiler.render_ms:.0f}ms",
-                    (26, 118), cv2.FONT_HERSHEY_SIMPLEX, 0.35, fps_color, 1, cv2.LINE_AA)
+        fps_color = (80, 255, 120) if self.profiler.fps >= 30.0 else ((80, 230, 255) if self.profiler.fps >= 20.0 else (80, 80, 255))
+        # Quality level color: ULTRA=green, HIGH=cyan, MEDIUM=yellow, LOW=red
+        q_colors = {"ULTRA": (80, 255, 80), "HIGH": (80, 230, 255), "MEDIUM": (80, 220, 200), "LOW": (80, 80, 255)}
+        q_color = q_colors.get(q_level, (180, 180, 190))
+        cv2.putText(frame,
+            f"PERF   : {self.profiler.fps:.1f} FPS  |  Trk: {self.profiler.track_ms:.0f}ms  |  Rdr: {self.profiler.render_ms:.0f}ms",
+            (26, 118), cv2.FONT_HERSHEY_SIMPLEX, 0.35, fps_color, 1, cv2.LINE_AA)
+        cv2.putText(frame, f"QUAL   : {q_level}",
+            (26, 134), cv2.FONT_HERSHEY_SIMPLEX, 0.35, q_color, 1, cv2.LINE_AA)
 
         # Top-Right Telemetry Badge (Auto-anchored with safe right padding)
         self.profiler.draw_telemetry(frame)

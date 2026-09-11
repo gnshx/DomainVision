@@ -63,6 +63,9 @@ class MediaPipeVisionTracker:
         }
         self._frame_counter = 0
         self._cached_mask: Optional[np.ndarray] = None
+        self._stable_mask: Optional[np.ndarray] = None  # Temporally stabilized mask
+        # Small kernel for morphological cleanup — small enough to preserve fingers/hair
+        self._morph_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 
         if self.async_mode:
             self._start_worker()
@@ -198,7 +201,21 @@ class MediaPipeVisionTracker:
                     mask_down = np.clip(conf * 255.0, 0, 255).astype(np.uint8)
                     # Upscale mask to full original resolution
                     mask_full = cv2.resize(mask_down, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
-                    self._cached_mask = mask_full
+
+                    # Morphological cleanup: remove isolated noise pixels, fill small holes
+                    # Using small (3x3) kernel to preserve thin structures (fingers, hair)
+                    mask_clean = cv2.morphologyEx(mask_full, cv2.MORPH_OPEN, self._morph_kernel)
+                    mask_clean = cv2.morphologyEx(mask_clean, cv2.MORPH_CLOSE, self._morph_kernel)
+
+                    # Temporal EMA stabilization: blend with previous stable mask
+                    # EMA alpha=0.45 means new frame contributes 45%, previous 55%
+                    # This smooths per-frame boundary flicker without introducing lag
+                    if self._stable_mask is None or self._stable_mask.shape != mask_clean.shape:
+                        self._stable_mask = mask_clean.astype(np.float32)
+                    else:
+                        self._stable_mask = 0.55 * self._stable_mask + 0.45 * mask_clean.astype(np.float32)
+
+                    self._cached_mask = np.clip(self._stable_mask, 0, 255).astype(np.uint8)
             except Exception:
                 pass
 

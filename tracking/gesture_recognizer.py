@@ -1,7 +1,7 @@
 import math
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
-from config import SIGN_HOLD_FRAMES_REQUIRED, SIGN_CONFIDENCE_THRESHOLD
+from config import SIGN_HOLD_FRAMES_REQUIRED, SIGN_CONFIDENCE_THRESHOLD, SIGN_DEACTIVATION_THRESHOLD
 
 
 class CanonicalGestureRecognizer:
@@ -232,12 +232,18 @@ class CanonicalGestureRecognizer:
         self.last_match_pct = match_pct
         self.last_sukuna_pct = int(score_sukuna * 100.0)
         self.last_gojo_pct = int(score_gojo * 100.0)
+        # Hysteresis: activate at confidence_threshold, but only START decaying below
+        # SIGN_DEACTIVATION_THRESHOLD. This prevents rapid flicker near the 78% boundary.
         is_matching = score >= self.confidence_threshold
+        is_above_deactivation = score >= SIGN_DEACTIVATION_THRESHOLD
 
         # Update stable frames hold counter
         if is_matching:
             self.stable_frames += 1
             self.detected_sign_name = sign_name
+        elif is_above_deactivation:
+            # Between deactivation and activation thresholds: hold counter but don't advance
+            pass  # stable_frames remains unchanged — hysteresis window
         else:
             # Graceful decay: drops by 2 rather than instant reset if 1 frame drops
             self.stable_frames = max(0, self.stable_frames - 2)
