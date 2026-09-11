@@ -1,5 +1,5 @@
 import time
-from typing import Tuple
+from typing import Tuple, Optional
 import cv2
 import numpy as np
 
@@ -54,18 +54,39 @@ class PerformanceProfiler:
                 self.frame_times.pop(0)
             self.fps = float(np.mean(self.frame_times))
 
-    def draw_telemetry(self, frame: np.ndarray, position: Tuple[int, int] = (14, 26)) -> np.ndarray:
-        """Draw sleek performance telemetry badge on frame."""
-        text = f"FPS: {self.fps:.1f} | Track: {self.track_ms:.1f}ms | Render: {self.render_ms:.1f}ms"
-        x, y = position
+    def draw_telemetry(self, frame: np.ndarray, position: Optional[Tuple[int, int]] = None) -> np.ndarray:
+        """Draw sleek, high-contrast performance telemetry badge that is never cropped."""
+        h, w = frame.shape[:2]
+        text = f"FPS: {self.fps:.1f} | TRACK: {self.track_ms:.1f}ms | RENDER: {self.render_ms:.1f}ms"
 
-        # Subtle dark pill background
-        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (x - 6, y - th - 6), (x + tw + 6, y + 6), (10, 8, 14), -1)
-        cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.46
+        thickness = 1
+        (tw, th), baseline = cv2.getTextSize(text, font, font_scale, thickness)
 
-        # Telemetry text
-        color = (80, 240, 120) if self.fps >= 28.0 else ((80, 200, 255) if self.fps >= 18.0 else (80, 80, 255))
-        cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1, cv2.LINE_AA)
+        if position is None:
+            # Safely anchor to top right with 20px padding from the right edge
+            x = w - tw - 24
+            y = 34
+        else:
+            x, y = position
+            # Ensure text doesn't overflow right edge
+            if x + tw + 12 > w:
+                x = w - tw - 24
+
+        # High-contrast solid dark container (ROI blending - avoids full 1280x720 frame clone)
+        pad_x = 10
+        pad_y = 7
+        bx1, by1 = max(0, x - pad_x), max(0, y - th - pad_y)
+        bx2, by2 = min(w, x + tw + pad_x), min(h, y + pad_y)
+        roi = frame[by1:by2, bx1:bx2]
+        dark_box = np.full_like(roi, (12, 8, 18))
+        cv2.addWeighted(dark_box, 0.90, roi, 0.10, 0, roi)
+        cv2.rectangle(frame, (bx1, by1), (bx2, by2), (0, 230, 255), 1)
+
+        # Drop shadow + vibrant neon text
+        color = (80, 255, 120) if self.fps >= 25.0 else ((80, 230, 255) if self.fps >= 15.0 else (80, 80, 255))
+        cv2.putText(frame, text, (x + 1, y + 1), font, font_scale, (0, 0, 0), thickness + 1, cv2.LINE_AA)
+        cv2.putText(frame, text, (x, y), font, font_scale, color, thickness, cv2.LINE_AA)
         return frame
+

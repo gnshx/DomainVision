@@ -17,6 +17,11 @@ class SyntheticDemoCamera:
         self.fps = fps
         self.frame_idx = 0
         self.is_open = True
+        self.state = "NORMAL"
+
+    def set_state(self, state: str):
+        """Syncs demo character pose with domain expansion state."""
+        self.state = state
 
     def isOpened(self) -> bool:
         return self.is_open
@@ -28,21 +33,19 @@ class SyntheticDemoCamera:
         if not self.is_open:
             return False, None
 
-        frame = np.zeros((self.h, self.w, 3), dtype=np.uint8)
-        # Background: Modern studio room gradient
-        bg_top = np.array([45, 40, 35], dtype=np.float32)
-        bg_bot = np.array([25, 20, 18], dtype=np.float32)
-        for y in range(self.h):
-            ratio = y / float(self.h)
-            frame[y, :] = (bg_top * (1.0 - ratio) + bg_bot * ratio).astype(np.uint8)
+        # Background: Modern studio room gradient (vectorized)
+        ratios = np.linspace(0, 1, self.h, endpoint=False, dtype=np.float32)[:, None, None]
+        bg_top = np.array([45, 40, 35], dtype=np.float32).reshape(1, 1, 3)
+        bg_bot = np.array([25, 20, 18], dtype=np.float32).reshape(1, 1, 3)
+        frame = (bg_top * (1.0 - ratios) + bg_bot * ratios).astype(np.uint8)
+        frame = np.repeat(frame, self.w, axis=1)
 
         # Subtle room ambient details (shelves / lines)
         cv2.line(frame, (0, int(self.h * 0.7)), (self.w, int(self.h * 0.7)), (35, 30, 25), 2)
         cv2.line(frame, (int(self.w * 0.2), 0), (int(self.w * 0.2), self.h), (30, 25, 22), 1)
         cv2.line(frame, (int(self.w * 0.8), 0), (int(self.w * 0.8), self.h), (30, 25, 22), 1)
 
-        # Timeline of the demo gesture (looping 360 frames = 12 seconds)
-        t = self.frame_idx % 360
+        t = self.frame_idx
         # Character center
         cx = self.w // 2
         cy = int(self.h * 0.55)
@@ -53,54 +56,29 @@ class SyntheticDemoCamera:
         cx += sway_x
         cy += sway_y
 
-        # Determine arm pose based on timeline:
-        # 0 - 50: Idle hands down
-        # 51 - 90: Raising hands up to chest
-        # 91 - 250: Clasped hands together (Domain Expansion pose)
-        # 251 - 290: Lowering hands back down
-        # 291 - 360: Idle
         left_shoulder = (cx - 70, cy - 60)
         right_shoulder = (cx + 70, cy - 60)
 
-        if t < 50:
-            # Idle
+        # Determine arm pose based on Domain Expansion state:
+        # NORMAL: Natural relaxed idle stance (NEVER auto-triggers expansion)
+        # CHARGING / EXPANSION / DOMAIN_ACTIVE: Hands clasped at chest in mudra pose
+        # COLLAPSE: Lowering hands back down
+        if self.state == "NORMAL":
             left_hand = (cx - 85, cy + 90)
             right_hand = (cx + 85, cy + 90)
             left_elbow = (cx - 95, cy + 15)
             right_elbow = (cx + 95, cy + 15)
-        elif t < 90:
-            # Raising hands
-            prog = (t - 50) / 40.0
-            left_hand = (
-                int((cx - 85) * (1 - prog) + (cx - 20) * prog),
-                int((cy + 90) * (1 - prog) + (cy - 35) * prog)
-            )
-            right_hand = (
-                int((cx + 85) * (1 - prog) + (cx + 20) * prog),
-                int((cy + 90) * (1 - prog) + (cy - 35) * prog)
-            )
-            left_elbow = (cx - 100, cy - 10)
-            right_elbow = (cx + 100, cy - 10)
-        elif t < 250:
-            # Domain Expansion: Clasped hands close together in front of chest!
+        elif self.state in ["CHARGING", "FLASH", "EXPANSION", "DOMAIN_ACTIVE"]:
             pulse = int(2 * math.sin(t * 0.3))
             left_hand = (cx - 15 + pulse, cy - 40)
             right_hand = (cx + 15 - pulse, cy - 40)
             left_elbow = (cx - 75, cy - 15)
             right_elbow = (cx + 75, cy - 15)
-        elif t < 290:
-            # Lowering
-            prog = (t - 250) / 40.0
-            left_hand = (
-                int((cx - 15) * (1 - prog) + (cx - 85) * prog),
-                int((cy - 40) * (1 - prog) + (cy + 90) * prog)
-            )
-            right_hand = (
-                int((cx + 15) * (1 - prog) + (cx + 85) * prog),
-                int((cy - 40) * (1 - prog) + (cy + 90) * prog)
-            )
-            left_elbow = (cx - 95, cy + 15)
-            right_elbow = (cx + 95, cy + 15)
+        elif self.state == "COLLAPSE":
+            left_hand = (cx - 60, cy + 50)
+            right_hand = (cx + 60, cy + 50)
+            left_elbow = (cx - 85, cy + 15)
+            right_elbow = (cx + 85, cy + 15)
         else:
             left_hand = (cx - 85, cy + 90)
             right_hand = (cx + 85, cy + 90)
