@@ -18,7 +18,7 @@ class CursedARWebServer:
         self.port = port
         self.app = DomainExpansionApp(
             demo_mode=True,
-            theme="infinite_void",
+            theme="malevolent_shrine",
             headless=True,
         )
         self.demo_cam = SyntheticDemoCamera(width=640, height=480)
@@ -214,11 +214,17 @@ class ARStreamHandler(BaseHTTPRequestHandler):
         }
         .btn-sukuna {
             background: linear-gradient(135deg, #990000, #d90429);
-            border: none;
+            border: 1px solid rgba(255, 60, 60, 0.4);
             box-shadow: 0 4px 16px rgba(217, 4, 41, 0.4);
         }
         .btn-sukuna:hover {
             background: linear-gradient(135deg, #b00, #ef233c);
+            box-shadow: 0 6px 20px rgba(255, 40, 60, 0.6);
+        }
+        .btn-theme.active {
+            outline: 2px solid #fff;
+            outline-offset: 2px;
+            box-shadow: 0 0 16px rgba(255, 255, 255, 0.6);
         }
         .btn-reset {
             background: #2b1f41;
@@ -256,12 +262,51 @@ class ARStreamHandler(BaseHTTPRequestHandler):
             display: none;
             max-width: 80%;
         }
+        .mudra-section {
+            margin-top: 20px;
+            max-width: 680px;
+            width: 100%;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .mudra-card {
+            background: rgba(20, 14, 32, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 14px;
+            transition: all 0.25s ease;
+        }
+        .mudra-card.active-card {
+            border-color: #c77dff;
+            background: rgba(35, 20, 55, 0.95);
+            box-shadow: 0 8px 24px rgba(157, 78, 221, 0.25);
+        }
+        .mudra-title {
+            font-size: 14px;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+        .mudra-desc {
+            font-size: 12px;
+            color: #b7a9ce;
+            line-height: 1.45;
+        }
+        .mudra-tip {
+            font-size: 11px;
+            color: #00f0ff;
+            margin-top: 6px;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>領域展開 • DOMAIN EXPANSION</h1>
-        <div class="subtitle">Real-Time OpenCV + MediaPipe AR Filter</div>
+        <div class="subtitle">DomainVision 2.0 — Canonical Finger Tracking & Layered AR Filter</div>
     </div>
 
     <div class="main-card">
@@ -281,8 +326,8 @@ class ARStreamHandler(BaseHTTPRequestHandler):
 
         <div class="controls">
             <button class="btn btn-expand" onclick="triggerAction('expand')">⚡ 領域展開 (Expand)</button>
-            <button class="btn" onclick="setTheme('infinite_void')">🌌 無量空処 (Infinite Void)</button>
-            <button class="btn btn-sukuna" onclick="setTheme('malevolent_shrine')">🩸 伏魔御廚子 (Sukuna)</button>
+            <button class="btn btn-theme btn-sukuna active" id="btn-sukuna" onclick="setTheme('malevolent_shrine')">🩸 伏魔御廚子 (Sukuna)</button>
+            <button class="btn btn-theme" id="btn-void" onclick="setTheme('infinite_void')">🌌 無量空処 (Infinite Void)</button>
             <button class="btn btn-reset" onclick="triggerAction('reset')">🔄 Reset Domain</button>
             <button class="btn" onclick="saveSnapshot()">📸 Snapshot</button>
         </div>
@@ -296,11 +341,28 @@ class ARStreamHandler(BaseHTTPRequestHandler):
         </div>
     </div>
 
+    <div class="mudra-section">
+        <div class="mudra-card active-card" id="card-sukuna">
+            <div class="mudra-title" style="color: #ff4d6d;">🩸 閻魔天印 (Sukuna)</div>
+            <div class="mudra-desc">
+                Bring both palms together at chest level. Keep <strong>thumbs upright</strong>, touch <strong>index fingertips</strong>, and curl ring & pinky fingers inward.
+            </div>
+            <div class="mudra-tip">⏱️ Hold for 12 frames to charge and trigger Malevolent Shrine!</div>
+        </div>
+        <div class="mudra-card" id="card-void">
+            <div class="mudra-title" style="color: #c77dff;">🌌 帝釈天印 (Gojo)</div>
+            <div class="mudra-desc">
+                Single hand raised to eye level. <strong>Cross your middle finger over your index finger</strong> with ring & pinky fingers curled down by thumb.
+            </div>
+            <div class="mudra-tip">⏱️ Hold for 12 frames to trigger Infinite Void!</div>
+        </div>
+    </div>
+
     <canvas id="offscreen-canvas" width="640" height="480" style="display: none;"></canvas>
 
     <script>
         let mode = 'webcam'; // 'webcam' or 'demo'
-        let currentTheme = 'infinite_void';
+        let currentTheme = 'malevolent_shrine';
         let pendingAction = '';
         let isProcessing = false;
         let videoStream = null;
@@ -325,7 +387,7 @@ class ARStreamHandler(BaseHTTPRequestHandler):
                 video.srcObject = videoStream;
                 await video.play();
                 cameraNotice.style.display = 'none';
-                statusText.innerText = "Live Webcam active. Bring hands together for Domain Expansion!";
+                statusText.innerText = "Live Webcam active. Bring palms together in Enma-ten mudra!";
             } catch (err) {
                 console.warn("Could not access local webcam:", err);
                 cameraNotice.innerHTML = "<strong>Local webcam not accessible or denied.</strong><br>Switching automatically to Synthetic Demo Feed.";
@@ -346,7 +408,7 @@ class ARStreamHandler(BaseHTTPRequestHandler):
                 statusText.innerText = "Local Webcam active.";
             } else {
                 cameraNotice.style.display = 'none';
-                statusText.innerText = "Synthetic Demo Feed active (Looping animated Gojo).";
+                statusText.innerText = "Synthetic Demo Feed active (Looping canonical Enma-ten mudra).";
             }
         }
 
@@ -356,6 +418,10 @@ class ARStreamHandler(BaseHTTPRequestHandler):
 
         function setTheme(theme) {
             currentTheme = theme;
+            document.getElementById('btn-sukuna').classList.toggle('active', theme === 'malevolent_shrine');
+            document.getElementById('btn-void').classList.toggle('active', theme === 'infinite_void');
+            document.getElementById('card-sukuna').classList.toggle('active-card', theme === 'malevolent_shrine');
+            document.getElementById('card-void').classList.toggle('active-card', theme === 'infinite_void');
         }
 
         function saveSnapshot() {

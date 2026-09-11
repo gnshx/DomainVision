@@ -7,24 +7,31 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
+from config import THEMES, DEFAULT_THEME
 from tracking.detector import MediaPipeVisionTracker
-from tracking.gesture import DomainGestureDetector
+from tracking.gesture_recognizer import CanonicalGestureRecognizer
+from tracking.hand_tracker import generate_synthetic_mudra_hands
 from effects.flash import DomainFlashEffect
-from effects.domain_background import DomainBackgroundRenderer
+from effects.domain_environment import DomainEnvironmentRenderer
 from effects.aura import CursedAuraEffect
-from effects.hand_energy import HandEnergyEffect
+from effects.cursed_energy import CursedEnergyEffect
 from effects.particles import CursedParticleSystem
 from effects.distortion import OpticalDistortionEffect
 from effects.shockwave import BarrierShockwaveEffect
 from utils.text_renderer import JapaneseTextRenderer
-from utils.audio import CursedSoundSynthesizer
+from audio.audio_manager import AudioManager
 from utils.demo_feed import SyntheticDemoCamera
+from utils.fps import PerformanceProfiler
 
 
 class DomainExpansionApp:
     """
-    Main controller for the JJK Domain Expansion AR Filter.
-    Orchestrates tracking, state machine, effects compositing, and rendering.
+    DomainVision 2.0: AR-grade JJK Domain Expansion filter.
+    - Precision 3D finger tracking & canonical JJK hand signs (Sukuna & Gojo)
+    - Temporal landmark smoothing without tracking jitter
+    - Perspective-anchored skeletal cursed energy
+    - Realistic Malevolent Shrine (⛩️ Pagoda) backdrop
+    - Frame-accurate audio state synchronization
     """
 
     STATES = ["NORMAL", "CHARGING", "FLASH", "EXPANSION", "DOMAIN_ACTIVE", "COLLAPSE"]
@@ -34,7 +41,7 @@ class DomainExpansionApp:
         input_source: Optional[str] = None,
         camera_idx: int = 0,
         demo_mode: bool = False,
-        theme: str = "infinite_void",
+        theme: str = DEFAULT_THEME,
         width: int = 640,
         height: int = 480,
         headless: bool = False,
@@ -43,41 +50,42 @@ class DomainExpansionApp:
     ):
         self.w = width
         self.h = height
-        self.theme_name = theme
+        self.theme_name = theme if theme in THEMES else DEFAULT_THEME
         self.headless = headless
         self.record_path = record_path
         self.max_frames = max_frames
         self.show_hud = True
 
-        # Initialize Video Capture
+        # Video source
         self.cap, self.is_demo = self._init_video_source(input_source, camera_idx, demo_mode)
 
-        # State Machine variables
+        # State Machine
         self.state = "NORMAL"
         self.state_timer = 0
         self.total_frames = 0
         self.energy_center = (self.w // 2, int(self.h * 0.5))
 
-        # Audio synthesizer
-        self.audio = CursedSoundSynthesizer()
+        # Profiler & Audio
+        self.profiler = PerformanceProfiler()
+        self.audio = AudioManager()
 
-        # MediaPipe Tracking
-        print("Initializing MediaPipe Vision Tracker...")
+        # Tracking Layer
+        print("Initializing MediaPipe Precision Vision Tracker...")
         self.tracker = MediaPipeVisionTracker()
-        self.gesture_detector = DomainGestureDetector(activation_frames=4)
+        self.gesture_recognizer = CanonicalGestureRecognizer()
 
-        # Visual Effects
-        print("Initializing Visual Effects Engines...")
+        # Visual Effects Engines
+        print("Initializing Perspective-Aware Visual Effects...")
         self.flash_fx = DomainFlashEffect(duration_frames=16)
-        self.bg_renderer = DomainBackgroundRenderer(width=self.w, height=self.h, theme=self.theme_name)
+        self.env_renderer = DomainEnvironmentRenderer(width=self.w, height=self.h, theme=self.theme_name)
         self.aura_fx = CursedAuraEffect(aura_thickness=18)
-        self.hand_fx = HandEnergyEffect()
+        self.cursed_energy_fx = CursedEnergyEffect()
         self.particle_system = CursedParticleSystem(max_particles=120)
         self.distortion_fx = OpticalDistortionEffect(width=self.w, height=self.h)
         self.shockwave_fx = BarrierShockwaveEffect()
         self.text_renderer = JapaneseTextRenderer()
 
-        # Video Recorder
+        # Video Writer
         self.video_writer = None
         if self.record_path:
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -95,7 +103,6 @@ class DomainExpansionApp:
             if cap.isOpened():
                 return cap, False
 
-        # Attempt to open webcam
         print(f"Attempting to open camera index {camera_idx}...")
         cap = cv2.VideoCapture(camera_idx)
         if cap.isOpened():
@@ -107,71 +114,69 @@ class DomainExpansionApp:
                 return cap, False
             cap.release()
 
-        # Fallback to demo mode if no camera found
         print("Notice: No live webcam detected. Falling back to SYNTHETIC DEMO mode.")
         return SyntheticDemoCamera(width=self.w, height=self.h), True
 
     def set_theme(self, theme_name: str):
-        if theme_name in self.bg_renderer.THEMES:
+        if theme_name in THEMES:
             self.theme_name = theme_name
-            self.bg_renderer.set_theme(theme_name)
-            print(f"Switched theme to: {self.theme_name}")
+            self.env_renderer.set_theme(theme_name)
+            print(f"Switched theme to: {self.theme_name} ({THEMES[theme_name]['name_ja']})")
 
     def trigger_domain(self):
         """Force-trigger Domain Expansion sequence."""
         if self.state in ["NORMAL", "CHARGING"]:
             self.state = "FLASH"
             self.state_timer = 0
-            theme_info = self.bg_renderer.theme
+            theme_info = self.env_renderer.theme
             self.flash_fx.trigger(theme_color=theme_info["primary_bgr"])
-            self.audio.play("flash")
-            self.distortion_fx.trigger_shake(magnitude=16.0)
+            self.audio.play("activation")
+            self.distortion_fx.trigger_shake(magnitude=18.0)
 
     def reset_domain(self):
-        """Reset domain back to normal."""
+        """Collapse domain back to normal."""
         self.state = "COLLAPSE"
         self.state_timer = 0
         self.audio.play("collapse")
 
     def _update_state_machine(self, gesture_info: dict):
-        """Advance the cinematic state machine."""
         self.state_timer += 1
-        theme_info = self.bg_renderer.theme
+        theme_info = self.env_renderer.theme
 
         # 1. NORMAL State
         if self.state == "NORMAL":
-            if gesture_info["gesture_active"] or gesture_info["is_holding_pose"]:
+            if gesture_info["trigger"]:
+                self.trigger_domain()
+            elif gesture_info["hold_progress"] > 0.25:
                 self.state = "CHARGING"
                 self.state_timer = 0
                 self.audio.play("charge")
 
         # 2. CHARGING State
         elif self.state == "CHARGING":
-            # Screen vibration during charge
-            if self.state_timer % 2 == 0:
-                self.distortion_fx.trigger_shake(magnitude=2.5)
+            if self.state_timer % 3 == 0:
+                self.distortion_fx.trigger_shake(magnitude=3.0)
 
-            # Auto-advance after charge duration (approx 20-25 frames)
-            if self.state_timer >= 22 or gesture_info["gesture_active"]:
+            if gesture_info["trigger"] or self.state_timer >= 22:
                 self.state = "FLASH"
                 self.state_timer = 0
                 self.flash_fx.trigger(theme_color=theme_info["primary_bgr"])
-                self.audio.play("flash")
-                self.distortion_fx.trigger_shake(magnitude=18.0)
-            elif not gesture_info["is_holding_pose"] and self.state_timer > 10 and not self.is_demo:
-                # Cancelled charging if user lowers hands early
+                self.audio.play("activation")
+                self.distortion_fx.trigger_shake(magnitude=20.0)
+            elif gesture_info["hold_progress"] <= 0.05 and not self.is_demo and self.state_timer > 8:
+                # User stopped holding the sign early
                 self.state = "NORMAL"
                 self.state_timer = 0
 
         # 3. FLASH State
         elif self.state == "FLASH":
-            # Midway through flash, ignite shockwaves
             if self.state_timer == 10:
+                # Shockwaves erupt
                 self.distortion_fx.trigger_shockwave(
                     center=self.energy_center,
                     max_radius=math.hypot(self.w, self.h),
                     duration_frames=26,
-                    strength=30.0
+                    strength=32.0
                 )
                 self.shockwave_fx.trigger(
                     center=self.energy_center,
@@ -179,7 +184,7 @@ class DomainExpansionApp:
                     secondary_color=theme_info["secondary_bgr"],
                     duration_frames=28
                 )
-                self.audio.play("expansion")
+                self.audio.play("impact")
 
             if self.state_timer >= 16:
                 self.state = "EXPANSION"
@@ -193,53 +198,60 @@ class DomainExpansionApp:
 
         # 5. DOMAIN_ACTIVE State
         elif self.state == "DOMAIN_ACTIVE":
-            # Domain stays open for 300 frames (~10 sec) then collapses
             if self.state_timer >= 280:
-                self.state = "COLLAPSE"
-                self.state_timer = 0
-                self.audio.play("collapse")
+                self.reset_domain()
 
         # 6. COLLAPSE State
         elif self.state == "COLLAPSE":
             if self.state_timer >= 25:
                 self.state = "NORMAL"
                 self.state_timer = 0
-                self.gesture_detector.reset()
+                self.gesture_recognizer.reset()
 
     def process_frame(self, raw_frame: np.ndarray) -> np.ndarray:
-        """Execute full visual pipeline on a single frame."""
-        # Ensure correct dimensions
+        self.profiler.start_frame()
+
         if raw_frame.shape[1] != self.w or raw_frame.shape[0] != self.h:
             raw_frame = cv2.resize(raw_frame, (self.w, self.h))
 
         h, w = self.h, self.w
-        theme_info = self.bg_renderer.theme
+        theme_info = self.env_renderer.theme
         col_pri = theme_info["primary_bgr"]
         col_sec = theme_info["secondary_bgr"]
 
         # 1. MediaPipe Vision Tracking
+        self.profiler.start_tracking()
         tracking = self.tracker.process(raw_frame)
+        self.profiler.end_tracking()
+
         person_mask = tracking["mask"]
         hands = tracking["hands"]
 
-        # 2. Gesture Evaluation
-        gesture_info = self.gesture_detector.update(tracking, (h, w))
-        if gesture_info.get("energy_point"):
-            self.energy_center = gesture_info["energy_point"]
+        if self.is_demo and len(hands) == 0:
+            hands = generate_synthetic_mudra_hands((h, w), self.total_frames, self.theme_name)
 
-        # Advance state
+        # 2. Canonical Hand Sign Evaluation
+        gesture_info = self.gesture_recognizer.update(
+            hands=hands,
+            frame_shape=(h, w),
+            target_theme=self.theme_name
+        )
+
+        if gesture_info.get("energy_center"):
+            self.energy_center = gesture_info["energy_center"]
+
+        # Advance State Machine
         self._update_state_machine(gesture_info)
 
-        # 3. Background Generation
+        # 3. Environment Generation (Shrine / Void)
         if self.state in ["DOMAIN_ACTIVE", "EXPANSION", "COLLAPSE"]:
-            domain_bg = self.bg_renderer.render(timer=self.total_frames)
+            domain_bg = self.env_renderer.render(timer=self.total_frames)
             if self.state == "EXPANSION":
-                # Radial wipe expanding outward
-                wipe_radius = int(math.hypot(w, h) * (self.state_timer / 32.0))
+                wipe_r = int(math.hypot(w, h) * (self.state_timer / 32.0))
                 mask_circ = np.zeros((h, w), dtype=np.uint8)
-                cv2.circle(mask_circ, self.energy_center, wipe_radius, 255, -1)
-                mask_circ_blurred = cv2.GaussianBlur(mask_circ, (31, 31), 0)
-                norm_wipe = (mask_circ_blurred.astype(np.float32) / 255.0)[:, :, np.newaxis]
+                cv2.circle(mask_circ, self.energy_center, wipe_r, 255, -1)
+                mask_blurred = cv2.GaussianBlur(mask_circ, (31, 31), 0)
+                norm_wipe = (mask_blurred.astype(np.float32) / 255.0)[:, :, np.newaxis]
                 active_bg = (domain_bg.astype(np.float32) * norm_wipe +
                              raw_frame.astype(np.float32) * (1.0 - norm_wipe)).astype(np.uint8)
             elif self.state == "COLLAPSE":
@@ -250,9 +262,8 @@ class DomainExpansionApp:
         else:
             active_bg = raw_frame.copy()
 
-        # 4. Person Foreground & Cursed Aura Compositing
+        # 4. Cursed Aura & Depth Compositing (Environment Behind -> Aura -> Person Foreground)
         if self.state in ["DOMAIN_ACTIVE", "EXPANSION", "COLLAPSE"]:
-            # Full aura compositing
             composited = self.aura_fx.composite_with_aura(
                 foreground_frame=raw_frame,
                 background_frame=active_bg,
@@ -263,7 +274,6 @@ class DomainExpansionApp:
                 aura_intensity=1.0 if self.state != "COLLAPSE" else (1.0 - self.state_timer / 25.0)
             )
         elif self.state == "CHARGING":
-            # Subtle charging aura on person
             composited = self.aura_fx.composite_with_aura(
                 foreground_frame=raw_frame,
                 background_frame=raw_frame,
@@ -277,39 +287,38 @@ class DomainExpansionApp:
             composited = raw_frame.copy()
 
         # 5. Cursed Particles System
-        particle_mode = "float"
-        p_intensity = 1.0
-        p_center = self.energy_center
+        p_mode = "float"
+        p_intensity = 0.0
         if self.state == "CHARGING":
-            particle_mode = "suck_in"
+            p_mode = "suck_in"
             p_intensity = 1.2
         elif self.state == "COLLAPSE":
-            particle_mode = "blast_out"
+            p_mode = "blast_out"
             p_intensity = 1.5
-        elif self.state == "NORMAL":
-            p_intensity = 0.0  # Clean normal video until domain activates
+        elif self.state in ["EXPANSION", "DOMAIN_ACTIVE"]:
+            p_mode = "float"
+            p_intensity = 1.0
 
         if p_intensity > 0.01:
             composited = self.particle_system.update_and_render(
                 composited,
                 primary_color=col_pri,
                 secondary_color=col_sec,
-                mode=particle_mode,
-                center=p_center,
+                mode=p_mode,
+                center=self.energy_center,
                 intensity=p_intensity
             )
 
-        # 6. Hand Energy Orbs & Electric Lightning
+        # 6. Perspective Hand Cursed Energy (Attached to Finger Joints)
         if self.state in ["CHARGING", "EXPANSION", "DOMAIN_ACTIVE"]:
-            composited = self.hand_fx.render_hand_effects(
+            energy_intensity = 0.7 if self.state == "CHARGING" else 1.0
+            composited = self.cursed_energy_fx.render(
                 composited,
                 hands=hands,
-                pose=tracking.get("pose"),
                 primary_color=col_pri,
                 secondary_color=col_sec,
                 timer=self.total_frames,
-                is_charging=(self.state == "CHARGING"),
-                energy_center=self.energy_center
+                intensity=energy_intensity
             )
 
         # 7. Barrier Shockwaves
@@ -319,12 +328,11 @@ class DomainExpansionApp:
         if self.flash_fx.active:
             composited, _ = self.flash_fx.apply(composited)
 
-        # 9. Optical Distortion & Screen Shake
+        # 9. Optical Distortion & Shake
         composited = self.distortion_fx.apply(composited)
 
-        # 10. Japanese Typography Overlay
+        # 10. Japanese Calligraphy Overlay
         if self.state in ["EXPANSION", "DOMAIN_ACTIVE"]:
-            # Text fades in during expansion, stays during domain, then fades
             if self.state == "EXPANSION":
                 text_prog = min(1.0, self.state_timer / 20.0)
             elif self.state == "DOMAIN_ACTIVE":
@@ -350,63 +358,67 @@ class DomainExpansionApp:
                 composited = (txt_bgr.astype(np.float32) * alpha_norm +
                               composited.astype(np.float32) * (1.0 - alpha_norm)).astype(np.uint8)
 
-        # 11. HUD Overlay
-        if self.show_hud and not self.headless:
+        # 11. HUD & Performance Telemetry
+        self.profiler.end_rendering()
+        if self.show_hud:
             self._render_hud(composited, gesture_info)
 
         self.total_frames += 1
         return composited
 
     def _render_hud(self, frame: np.ndarray, gesture_info: dict):
-        """Render a sleek modern AR HUD."""
-        # Top-left status pill
         h, w = frame.shape[:2]
-        hud_w, hud_h = 290, 85
+        hud_w, hud_h = 320, 105
         overlay = frame.copy()
-        cv2.rectangle(overlay, (12, 12), (12 + hud_w, 12 + hud_h), (18, 14, 22), -1)
-        cv2.rectangle(overlay, (12, 12), (12 + hud_w, 12 + hud_h), (70, 50, 90), 1)
-        cv2.addWeighted(overlay, 0.78, frame, 0.22, 0, frame)
+        cv2.rectangle(overlay, (12, 12), (12 + hud_w, 12 + hud_h), (16, 12, 22), -1)
+        cv2.rectangle(overlay, (12, 12), (12 + hud_w, 12 + hud_h), (70, 45, 90), 1)
+        cv2.addWeighted(overlay, 0.82, frame, 0.18, 0, frame)
 
-        # State badge color
-        state_colors = {
-            "NORMAL": (180, 180, 180),
-            "CHARGING": (80, 210, 255),
-            "FLASH": (255, 255, 255),
-            "EXPANSION": (255, 100, 220),
-            "DOMAIN_ACTIVE": (255, 60, 180),
-            "COLLAPSE": (100, 100, 200),
-        }
-        color = state_colors.get(self.state, (200, 200, 200))
+        # State & Theme
+        cv2.putText(frame, f"STATUS : {self.state}", (22, 34),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(frame, f"DOMAIN : {self.env_renderer.theme['name_en']} ({self.env_renderer.theme['character']})",
+                    (22, 54), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 180, 240), 1, cv2.LINE_AA)
 
-        cv2.putText(frame, f"STATUS: {self.state}", (22, 34),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
-        cv2.putText(frame, f"THEME : {self.bg_renderer.theme['name_en']}", (22, 54),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 220, 220), 1, cv2.LINE_AA)
-        cv2.putText(frame, "[D/Space] Expand  [1/2] Theme  [R] Reset", (22, 74),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (160, 160, 160), 1, cv2.LINE_AA)
+        # Sign Tracking Progress
+        if gesture_info["sign_name"]:
+            sign_text = f"SIGN   : {gesture_info['sign_name']}"
+            bar_color = (80, 240, 120)
+        else:
+            sign_text = "SIGN   : Make Sukuna / Gojo Hand Mudra"
+            bar_color = (180, 180, 180)
 
-        # Charging bar when charging
-        if self.state == "CHARGING":
-            charge_ratio = min(1.0, self.state_timer / 22.0)
-            bar_w = int(hud_w * charge_ratio)
-            cv2.rectangle(frame, (12, 12 + hud_h - 4), (12 + bar_w, 12 + hud_h), (80, 220, 255), -1)
+        cv2.putText(frame, sign_text, (22, 74),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, bar_color, 1, cv2.LINE_AA)
+
+        # Hold Progress Bar
+        bar_bg_w = hud_w - 20
+        cv2.rectangle(frame, (22, 84), (22 + bar_bg_w, 94), (40, 30, 50), -1)
+        fill_w = int(bar_bg_w * gesture_info["hold_progress"])
+        if fill_w > 0:
+            fill_col = (80, 230, 255) if gesture_info["hold_progress"] < 1.0 else (80, 255, 120)
+            cv2.rectangle(frame, (22, 84), (22 + fill_w, 94), fill_col, -1)
+
+        # Performance Telemetry Badge (Top-Right)
+        self.profiler.draw_telemetry(frame, position=(w - 285, 30))
 
     def run(self):
-        """Main application loop."""
         print("\n=======================================================")
-        print("  JUJUTSU KAISEN - DOMAIN EXPANSION AR FILTER (領域展開)")
+        print("  DOMAINVISION 2.0 - CANONICAL AR FILTER (領域展開)")
         print("=======================================================")
+        print("  Hand Signs:")
+        print("    - Sukuna (Enma-ten Mudra): Palms pressed, thumbs upright, index touching")
+        print("    - Gojo   (Taishakuten Mudra): Index & Middle fingers crossed")
         print("  Controls:")
-        print("    [D] / [Space] : Trigger Domain Expansion")
-        print("    [1]           : Switch to Infinite Void (無量空処)")
-        print("    [2]           : Switch to Malevolent Shrine (伏魔御廚子)")
-        print("    [R]           : Reset / Collapse Domain")
-        print("    [H]           : Toggle HUD Overlay")
-        print("    [S]           : Save Screenshot")
-        print("    [Q] / [ESC]   : Quit")
+        print("    [1]         : Switch to Malevolent Shrine (伏魔御廚子 - Sukuna)")
+        print("    [2]         : Switch to Infinite Void (無量空処 - Gojo)")
+        print("    [D] / Space : Force Trigger Domain Expansion")
+        print("    [R]         : Reset / Collapse Domain")
+        print("    [H]         : Toggle HUD")
+        print("    [S]         : Save Screenshot")
+        print("    [Q] / ESC   : Quit")
         print("=======================================================\n")
 
-        fps_timer = time.time()
         frame_counter = 0
 
         try:
@@ -414,8 +426,7 @@ class DomainExpansionApp:
                 ret, raw_frame = self.cap.read()
                 if not ret or raw_frame is None:
                     if self.is_demo:
-                        # Demo loops indefinitely unless max_frames specified
-                        pass
+                        continue
                     else:
                         break
 
@@ -426,18 +437,18 @@ class DomainExpansionApp:
 
                 frame_counter += 1
                 if not self.headless:
-                    cv2.imshow("Domain Expansion AR", output_frame)
+                    cv2.imshow("DomainVision AR", output_frame)
                     key = cv2.waitKey(1) & 0xFF
                     if key in [ord("q"), ord("Q"), 27]:
                         break
-                    elif key in [ord("d"), ord("D"), 32]:  # Space or D
+                    elif key in [ord("d"), ord("D"), 32]:
                         self.trigger_domain()
                     elif key in [ord("r"), ord("R")]:
                         self.reset_domain()
                     elif key == ord("1"):
-                        self.set_theme("infinite_void")
-                    elif key == ord("2"):
                         self.set_theme("malevolent_shrine")
+                    elif key == ord("2"):
+                        self.set_theme("infinite_void")
                     elif key in [ord("h"), ord("H")]:
                         self.show_hud = not self.show_hud
                     elif key in [ord("s"), ord("S")]:
@@ -448,14 +459,6 @@ class DomainExpansionApp:
                 if self.max_frames and frame_counter >= self.max_frames:
                     print(f"Reached max frames limit ({self.max_frames}). Finishing.")
                     break
-
-                # FPS tracking
-                if frame_counter % 30 == 0:
-                    elapsed = time.time() - fps_timer
-                    fps = 30.0 / elapsed if elapsed > 0 else 0
-                    if self.headless:
-                        print(f"Frame {frame_counter} | State: {self.state} | FPS: {fps:.1f}")
-                    fps_timer = time.time()
 
         finally:
             self.cleanup()
@@ -475,12 +478,12 @@ class DomainExpansionApp:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="JJK Domain Expansion AR Filter")
+    parser = argparse.ArgumentParser(description="DomainVision 2.0 AR Filter")
     parser.add_argument("--camera", type=int, default=0, help="Webcam device index (default: 0)")
     parser.add_argument("--video", type=str, default=None, help="Path to input video file")
     parser.add_argument("--demo", action="store_true", help="Force synthetic demo simulation mode")
-    parser.add_argument("--theme", type=str, default="infinite_void",
-                        choices=["infinite_void", "malevolent_shrine"], help="Domain Theme")
+    parser.add_argument("--theme", type=str, default=DEFAULT_THEME,
+                        choices=list(THEMES.keys()), help="Domain Theme")
     parser.add_argument("--record", type=str, default=None, help="Path to save output video (.mp4)")
     parser.add_argument("--frames", type=int, default=None, help="Stop after N frames")
     parser.add_argument("--headless", action="store_true", help="Run without GUI display")
@@ -489,13 +492,11 @@ def main():
 
     args = parser.parse_args()
 
-    # Auto-detect headless if DISPLAY is not set
     is_headless = args.headless or ("DISPLAY" not in os.environ or not os.environ["DISPLAY"])
     record_path = args.record
     if is_headless and record_path is None:
         record_path = "output.mp4"
         print("SSH/Headless session detected: Automatically recording to output.mp4")
-        print("You can click output.mp4 in your editor explorer to view it directly!")
 
     app = DomainExpansionApp(
         input_source=args.video,
