@@ -1,0 +1,10 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary outputs
+output.mp4
+domain_screenshot_*.png
+.vscode/
+.DS_Store
