@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import mediapipe as mp
 from mediapipe.tasks.python import vision, BaseOptions
+from tracking.hand_tracker import AdvancedHandTracker
 
 
 class MediaPipeVisionTracker:
@@ -26,6 +27,7 @@ class MediaPipeVisionTracker:
         self.segmenter = None
         self.hand_landmarker = None
         self.pose_landmarker = None
+        self.hand_analyzer = AdvancedHandTracker()
 
         if enable_segmenter:
             seg_path = os.path.join(models_dir, "selfie_segmenter.tflite")
@@ -95,19 +97,10 @@ class MediaPipeVisionTracker:
                 hand_res = self.hand_landmarker.detect(mp_image)
                 if hand_res and hand_res.hand_landmarks:
                     for idx, hand_lms in enumerate(hand_res.hand_landmarks):
-                        # Convert normalized landmarks to pixel coords
-                        coords = [(int(lm.x * w), int(lm.y * h)) for lm in hand_lms]
-                        # Palm center approx (average of wrist 0, index_mcp 5, pinky_mcp 17)
-                        palm_x = int((coords[0][0] + coords[5][0] + coords[17][0]) / 3.0)
-                        palm_y = int((coords[0][1] + coords[5][1] + coords[17][1]) / 3.0)
-                        result["hands"].append({
-                            "landmarks": coords,
-                            "palm_center": (palm_x, palm_y),
-                            "wrist": coords[0],
-                            "index_tip": coords[8],
-                            "middle_tip": coords[12],
-                            "thumb_tip": coords[4],
-                        })
+                        analyzed = self.hand_analyzer.analyze_hand(hand_lms, (h, w), hand_idx=idx)
+                        result["hands"].append(analyzed)
+                else:
+                    self.hand_analyzer.reset()
             except Exception:
                 pass
 
