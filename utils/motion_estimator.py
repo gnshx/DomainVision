@@ -99,8 +99,10 @@ class CameraMotionEstimator:
                 good_curr = curr_pts[status.ravel() == 1]
 
                 if len(good_curr) > 2:
+                    good_prev_2d = good_prev.reshape(-1, 2)
+                    good_curr_2d = good_curr.reshape(-1, 2)
                     # Per-point displacement
-                    displacements = good_curr - good_prev
+                    displacements = good_curr_2d - good_prev_2d
                     # Median displacement = global camera translation (robust to local motion)
                     raw_dx_small = float(np.median(displacements[:, 0]))
                     raw_dy_small = float(np.median(displacements[:, 1]))

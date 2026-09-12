@@ -170,7 +170,7 @@ class DomainExpansionApp:
         # Picture-in-Picture camera capture for bottom display during animated feed
         self.camera_idx = camera_idx
         self.pip_cap = None
-        if self.is_demo:
+        if self.is_demo and not self.headless:
             try:
                 cam = cv2.VideoCapture(self.camera_idx)
                 if cam.isOpened():
@@ -575,7 +575,7 @@ class DomainExpansionApp:
             self._render_hud(composited, gesture_info, q_level=self.quality_ctrl.level)
 
         # 12. Show User Camera Display in Bottom during Animated Feed
-        if self.is_demo:
+        if self.is_demo and not self.headless:
             self._render_bottom_cam_display(composited)
 
         self.total_frames += 1

@@ -15,16 +15,18 @@ from utils.demo_feed import SyntheticDemoCamera
 
 
 class CursedARWebServer:
-    def __init__(self, port: int = 8080):
+    def __init__(self, port: int = 8080, width: int = 640, height: int = 360):
         self.port = port
+        self.width = width
+        self.height = height
         self.app = DomainExpansionApp(
             demo_mode=True,
             theme="malevolent_shrine",
-            width=1280,
-            height=720,
+            width=self.width,
+            height=self.height,
             headless=True,
         )
-        self.demo_cam = SyntheticDemoCamera(width=1280, height=720)
+        self.demo_cam = SyntheticDemoCamera(width=self.width, height=self.height)
         self.lock = threading.Lock()
         self.last_action = None
 
@@ -34,6 +36,9 @@ class CursedARWebServer:
                 self.app.trigger_domain()
             elif action == "reset":
                 self.app.reset_domain()
+
+            if input_bgr.shape[1] != self.width or input_bgr.shape[0] != self.height:
+                input_bgr = cv2.resize(input_bgr, (self.width, self.height))
 
             return self.app.process_frame(input_bgr)
 
@@ -45,12 +50,14 @@ class CursedARWebServer:
                 self.app.reset_domain()
 
             if user_cam_bgr is not None:
+                if user_cam_bgr.shape[1] != self.width or user_cam_bgr.shape[0] != self.height:
+                    user_cam_bgr = cv2.resize(user_cam_bgr, (self.width, self.height))
                 user_tracking = self.app.tracker.process(user_cam_bgr)
                 self.app._cached_webcam_hands = user_tracking.get("hands", [])
 
             ret, demo_raw = self.demo_cam.read()
             if not ret or demo_raw is None:
-                self.demo_cam = SyntheticDemoCamera(width=1280, height=720)
+                self.demo_cam = SyntheticDemoCamera(width=self.width, height=self.height)
                 _, demo_raw = self.demo_cam.read()
 
             self.demo_cam.set_state(self.app.state)
@@ -438,7 +445,7 @@ class ARStreamHandler(BaseHTTPRequestHandler):
                 </div>
             </div>
 
-            <img id="output-canvas" src="" alt="Domain Expansion Feed">
+            <canvas id="output-canvas" width="640" height="360"></canvas>
 
             <!-- Picture-in-Picture Live Webcam Box at Bottom (During Animated Demo Feed) -->
             <div id="pip-container" class="pip-container">
@@ -505,7 +512,8 @@ class ARStreamHandler(BaseHTTPRequestHandler):
         const video = document.getElementById('hidden-video');
         const pipVideo = document.getElementById('pip-video');
         const pipContainer = document.getElementById('pip-container');
-        const outputImg = document.getElementById('output-canvas');
+        const outputCanvas = document.getElementById('output-canvas');
+        const outCtx = outputCanvas.getContext('2d');
         const offCanvas = document.getElementById('offscreen-canvas');
         const offCtx = offCanvas.getContext('2d');
         const cameraNotice = document.getElementById('camera-notice');
@@ -519,6 +527,19 @@ class ARStreamHandler(BaseHTTPRequestHandler):
 
         let frameCount = 0;
         let lastFpsTime = performance.now();
+
+        function drawInitialPlaceholder() {
+            outCtx.fillStyle = "#0c0816";
+            outCtx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
+            outCtx.font = "bold 15px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+            outCtx.fillStyle = "#c77dff";
+            outCtx.textAlign = "center";
+            outCtx.fillText("領域展開 • INITIALIZING DOMAIN STREAM", outputCanvas.width / 2, outputCanvas.height / 2 - 8);
+            outCtx.font = "12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+            outCtx.fillStyle = "#00f0ff";
+            outCtx.fillText("Connecting camera & neural vision pipeline...", outputCanvas.width / 2, outputCanvas.height / 2 + 16);
+        }
+        drawInitialPlaceholder();
 
         async function initCamera() {
             cameraNotice.style.display = 'block';
@@ -564,11 +585,13 @@ class ARStreamHandler(BaseHTTPRequestHandler):
         }
 
         function saveSnapshot() {
-            if (outputImg.src) {
+            try {
                 const a = document.createElement('a');
-                a.href = outputImg.src;
+                a.href = outputCanvas.toDataURL('image/jpeg', 0.92);
                 a.download = `domain_snapshot_${Date.now()}.jpg`;
                 a.click();
+            } catch (err) {
+                console.warn("Snapshot error:", err);
             }
         }
 
@@ -577,34 +600,42 @@ class ARStreamHandler(BaseHTTPRequestHandler):
                 isProcessing = true;
                 const act = pendingAction;
                 pendingAction = '';
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 2500);
 
                 try {
                     let response;
                     if (mode === 'webcam' && video.readyState >= 2) {
                         offCtx.drawImage(video, 0, 0, 640, 360);
-                        const blob = await new Promise(resolve => offCanvas.toBlob(resolve, 'image/jpeg', 0.85));
+                        const blob = await new Promise(resolve => offCanvas.toBlob(resolve, 'image/jpeg', 0.75));
 
                         response = await fetch(`/api/process_frame?action=${act}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'image/jpeg' },
-                            body: blob
+                            body: blob,
+                            signal: controller.signal
                         });
                     } else if (mode === 'demo' && videoStream && (pipVideo.readyState >= 2 || video.readyState >= 2)) {
                         // User is viewing animated demo feed with live webcam active at bottom!
                         // Send webcam frame so user's real fingers are tracked to trigger expansion!
                         const srcVid = pipVideo.readyState >= 2 ? pipVideo : video;
                         offCtx.drawImage(srcVid, 0, 0, 640, 360);
-                        const blob = await new Promise(resolve => offCanvas.toBlob(resolve, 'image/jpeg', 0.85));
+                        const blob = await new Promise(resolve => offCanvas.toBlob(resolve, 'image/jpeg', 0.75));
 
                         response = await fetch(`/api/demo_frame?action=${act}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'image/jpeg' },
-                            body: blob
+                            body: blob,
+                            signal: controller.signal
                         });
                     } else {
                         // Demo mode without active camera
-                        response = await fetch(`/api/demo_frame?action=${act}`);
+                        response = await fetch(`/api/demo_frame?action=${act}`, {
+                            signal: controller.signal
+                        });
                     }
+
+                    clearTimeout(timeoutId);
 
                     if (response && response.ok) {
                         // Read telemetry headers from server
@@ -647,12 +678,19 @@ class ARStreamHandler(BaseHTTPRequestHandler):
                         }
 
                         const imgBlob = await response.blob();
-                        const oldUrl = outputImg.src;
-                        outputImg.src = URL.createObjectURL(imgBlob);
-                        if (oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
+                        if (imgBlob && imgBlob.size > 0) {
+                            try {
+                                const bmp = await createImageBitmap(imgBlob);
+                                outCtx.drawImage(bmp, 0, 0, outputCanvas.width, outputCanvas.height);
+                                bmp.close();
+                            } catch (decodeErr) {
+                                // Frame decode drop
+                            }
+                        }
                     }
                 } catch (err) {
-                    // Ignore frame drop
+                    clearTimeout(timeoutId);
+                    // Network or timeout drop, continue loop smoothly
                 } finally {
                     isProcessing = false;
                 }
@@ -669,18 +707,23 @@ class ARStreamHandler(BaseHTTPRequestHandler):
 
         elif parsed.path == "/api/demo_frame":
             action = params.get("action", [""])[0]
-            out_frame = SERVER_INSTANCE.process_demo_frame(action=action)
-            ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            try:
+                out_frame = SERVER_INSTANCE.process_demo_frame(action=action)
+                ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
 
-            if ret:
-                self.send_response(200)
-                self.send_header("Content-Type", "image/jpeg")
-                self.send_header("Content-Length", str(len(buf)))
-                self._send_telemetry_headers()
-                self.end_headers()
-                self.wfile.write(buf.tobytes())
-            else:
-                self.send_error(500)
+                if ret:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(buf)))
+                    self._send_telemetry_headers()
+                    self.end_headers()
+                    self.wfile.write(buf.tobytes())
+                else:
+                    self.send_error(500)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.send_error(500, str(e))
 
         else:
             self.send_error(404)
@@ -705,18 +748,22 @@ class ARStreamHandler(BaseHTTPRequestHandler):
                 return
 
             action = params.get("action", [""])[0]
-            out_frame = SERVER_INSTANCE.process_image(input_bgr, action=action)
-
-            ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            if ret:
-                self.send_response(200)
-                self.send_header("Content-Type", "image/jpeg")
-                self.send_header("Content-Length", str(len(buf)))
-                self._send_telemetry_headers()
-                self.end_headers()
-                self.wfile.write(buf.tobytes())
-            else:
-                self.send_error(500)
+            try:
+                out_frame = SERVER_INSTANCE.process_image(input_bgr, action=action)
+                ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                if ret:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(buf)))
+                    self._send_telemetry_headers()
+                    self.end_headers()
+                    self.wfile.write(buf.tobytes())
+                else:
+                    self.send_error(500)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.send_error(500, str(e))
 
         elif parsed.path == "/api/demo_frame":
             content_len = int(self.headers.get("Content-Length", 0))
@@ -727,18 +774,22 @@ class ARStreamHandler(BaseHTTPRequestHandler):
                 user_cam_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
             action = params.get("action", [""])[0]
-            out_frame = SERVER_INSTANCE.process_demo_frame(user_cam_bgr=user_cam_bgr, action=action)
-
-            ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            if ret:
-                self.send_response(200)
-                self.send_header("Content-Type", "image/jpeg")
-                self.send_header("Content-Length", str(len(buf)))
-                self._send_telemetry_headers()
-                self.end_headers()
-                self.wfile.write(buf.tobytes())
-            else:
-                self.send_error(500)
+            try:
+                out_frame = SERVER_INSTANCE.process_demo_frame(user_cam_bgr=user_cam_bgr, action=action)
+                ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                if ret:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(buf)))
+                    self._send_telemetry_headers()
+                    self.end_headers()
+                    self.wfile.write(buf.tobytes())
+                else:
+                    self.send_error(500)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.send_error(500, str(e))
         else:
             self.send_error(404)
 
@@ -747,10 +798,13 @@ def main():
     global SERVER_INSTANCE
     parser = argparse.ArgumentParser(description="DomainVision Web Streamer")
     parser.add_argument("--port", type=int, default=8080, help="Port (default: 8080)")
+    parser.add_argument("--width", type=int, default=640, help="Processing width (default: 640)")
+    parser.add_argument("--height", type=int, default=360, help="Processing height (default: 360)")
     args = parser.parse_args()
 
-    SERVER_INSTANCE = CursedARWebServer(port=args.port)
+    SERVER_INSTANCE = CursedARWebServer(port=args.port, width=args.width, height=args.height)
     server_address = ("0.0.0.0", args.port)
+    ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer(server_address, ARStreamHandler)
 
     print("\n=======================================================")
