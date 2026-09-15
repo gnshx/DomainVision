@@ -1,4 +1,5 @@
 import argparse
+import json
 import math
 import os
 import sys
@@ -107,6 +108,9 @@ class DomainExpansionApp:
         headless: bool = False,
         record_path: Optional[str] = None,
         max_frames: Optional[int] = None,
+        calibrate_mode: bool = False,
+        log_gestures: bool = False,
+        flip_webcam: bool = True,
     ):
         self.w = width
         self.h = height
@@ -115,6 +119,11 @@ class DomainExpansionApp:
         self.record_path = record_path
         self.max_frames = max_frames
         self.show_hud = True
+        self.show_landmarks = True
+        self.calibrate_mode = calibrate_mode
+        self.log_gestures = log_gestures
+        self.flip_webcam = flip_webcam
+        self.log_file = "gesture_samples.jsonl" if log_gestures else None
 
         # Video Source
         self.cap, self.is_demo = self._init_video_source(input_source, camera_idx, demo_mode)
@@ -341,6 +350,9 @@ class DomainExpansionApp:
     def process_frame(self, raw_frame: np.ndarray) -> np.ndarray:
         self.profiler.start_frame()
 
+        if not self.is_demo and self.flip_webcam:
+            raw_frame = cv2.flip(raw_frame, 1)
+
         if raw_frame.shape[1] != self.w or raw_frame.shape[0] != self.h:
             raw_frame = cv2.resize(raw_frame, (self.w, self.h))
 
@@ -357,16 +369,9 @@ class DomainExpansionApp:
         person_mask = tracking["mask"]
         hands = tracking["hands"]
 
-        # When in demo mode, check user's live camera feed for real hands if available
         if hasattr(self, "_cached_webcam_hands") and self._cached_webcam_hands:
             hands = self._cached_webcam_hands
             self._cached_webcam_hands = []
-        elif len(hands) == 0 and self.pip_cap and self.pip_cap.isOpened():
-            ret_cam, raw_cam = self.pip_cap.read()
-            if ret_cam and raw_cam is not None:
-                user_tracking = self.tracker.process(raw_cam)
-                if user_tracking and user_tracking.get("hands"):
-                    hands = user_tracking["hands"]
 
         if self.is_demo and len(hands) == 0:
             # Only synthesize skeletal energy joints when domain is ALREADY active or triggered
@@ -376,17 +381,17 @@ class DomainExpansionApp:
             else:
                 hands = []
 
-        # 2. Canonical Hand Sign Evaluation with 21 Landmarks
+        # 2. Canonical Hand Sign Evaluation with Invariant Geometry & Multi-Class State
         gesture_info = self.gesture_recognizer.update(
             hands=hands,
             frame_shape=(h, w),
             target_theme=self.theme_name,
         )
 
-        # Automatic character theme switching based on the finger symbol!
+        # Automatic character theme switching based strictly on confirmed/high-confidence mudra!
         detected_theme = gesture_info.get("detected_theme")
         if detected_theme and self.state == "NORMAL":
-            if detected_theme != self.theme_name and (gesture_info.get("match_pct", 0) > 35 or gesture_info.get("sign_detected")):
+            if detected_theme != self.theme_name and (gesture_info.get("sign_detected") or gesture_info.get("match_pct", 0) >= 72):
                 self.set_theme(detected_theme)
 
         if gesture_info.get("energy_center"):
@@ -569,10 +574,22 @@ class DomainExpansionApp:
                 bloom_threshold=200,
             )
 
+        # 10.8 Gesture Landmarks & Skeleton Visualization
+        if self.show_landmarks and hands:
+            composited = self._render_landmarks(composited, hands)
+
         # 11. Sleek HUD & Performance Telemetry (Crystal Clear Visibility)
         self.profiler.end_rendering()
         if self.show_hud:
-            self._render_hud(composited, gesture_info, q_level=self.quality_ctrl.level)
+            self._render_hud(composited, gesture_info, hands=hands, q_level=self.quality_ctrl.level)
+
+        # 11.5 Gesture Calibration Panel (Active in Calibration Mode)
+        if self.calibrate_mode:
+            self._render_calibration_overlay(composited, hands, gesture_info)
+
+        # 11.8 Misclassification Sample Logging
+        if self.log_gestures:
+            self._log_gesture_sample(hands, gesture_info)
 
         # 12. Show User Camera Display in Bottom during Animated Feed
         if self.is_demo and not self.headless:
@@ -580,6 +597,177 @@ class DomainExpansionApp:
 
         self.total_frames += 1
         return composited
+
+    def _render_landmarks(self, frame: np.ndarray, hands: List[Dict[str, Any]]) -> np.ndarray:
+        """Renders 21 MediaPipe skeletal joints, finger bones, bounding boxes, and handedness."""
+        bones = [
+            (0, 1), (1, 2), (2, 3), (3, 4),        # thumb
+            (0, 5), (5, 6), (6, 7), (7, 8),        # index
+            (5, 9), (9, 10), (10, 11), (11, 12),   # middle
+            (9, 13), (13, 14), (14, 15), (15, 16), # ring
+            (13, 17), (17, 18), (18, 19), (19, 20),# pinky
+            (0, 17),                                # palm base
+        ]
+        finger_tip_indices = [4, 8, 12, 16, 20]
+        finger_names = ["thumb", "index", "middle", "ring", "pinky"]
+
+        for idx, h in enumerate(hands):
+            lms = h["landmarks"]
+            scale = h.get("palm_scale", 30)
+            handedness = h.get("handedness", "Unknown")
+            hand_conf = h.get("handedness_conf", 1.0)
+            f_states = h.get("finger_states", {})
+
+            # 1. Draw finger bones
+            for i1, i2 in bones:
+                if i1 < len(lms) and i2 < len(lms):
+                    cv2.line(frame, lms[i1], lms[i2], (255, 200, 50), 2, cv2.LINE_AA)
+
+            # 2. Draw joint landmarks
+            for pt in lms:
+                cv2.circle(frame, pt, 3, (0, 240, 255), -1, cv2.LINE_AA)
+
+            # 3. Draw color-coded fingertips (Green=EXTENDED, Yellow=BENT, Red=CURLED)
+            for tip_i, fname in zip(finger_tip_indices, finger_names):
+                if tip_i < len(lms):
+                    st = f_states.get(fname, "BENT")
+                    t_col = (80, 255, 80) if st == "EXTENDED" else ((0, 230, 255) if st == "BENT" else (50, 50, 255))
+                    cv2.circle(frame, lms[tip_i], 6, t_col, -1, cv2.LINE_AA)
+                    cv2.circle(frame, lms[tip_i], 7, (255, 255, 255), 1, cv2.LINE_AA)
+
+            # 4. Palm Center Crosshair
+            cx, cy = h["palm_center"]
+            cv2.drawMarker(frame, (cx, cy), (0, 255, 255), cv2.MARKER_CROSS, 12, 1, cv2.LINE_AA)
+
+            # 5. Hand Bounding Box & Handedness Tag
+            bbox = h.get("bbox")
+            if bbox:
+                x1, y1, x2, y2 = bbox
+                box_pad = 10
+                bx1, by1 = max(0, x1 - box_pad), max(0, y1 - box_pad)
+                bx2, by2 = min(frame.shape[1], x2 + box_pad), min(frame.shape[0], y2 + box_pad)
+                cv2.rectangle(frame, (bx1, by1), (bx2, by2), (180, 100, 255), 1)
+
+                label = f"{handedness} ({int(hand_conf * 100)}%)"
+                cv2.rectangle(frame, (bx1, max(0, by1 - 18)), (bx1 + 100, by1), (20, 12, 30), -1)
+                cv2.putText(frame, label, (bx1 + 4, max(12, by1 - 4)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 180, 255), 1, cv2.LINE_AA)
+
+        return frame
+
+    def _render_calibration_overlay(
+        self, frame: np.ndarray, hands: List[Dict[str, Any]], gesture_info: dict
+    ):
+        """Displays real-time geometric mudra telemetry for calibration and tuning."""
+        h, w = frame.shape[:2]
+        cw, ch = 390, 360
+        x1 = w - cw - 16
+        y1 = 80
+        x2 = x1 + cw
+        y2 = y1 + ch
+
+        roi = frame[y1:y2, x1:x2]
+        card = np.full_like(roi, (10, 8, 16))
+        cv2.addWeighted(card, 0.88, roi, 0.12, 0, roi)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 120, 0), 2)
+
+        cv2.putText(frame, "GESTURE CALIBRATION [C to toggle]", (x1 + 12, y1 + 24),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.46, (255, 160, 40), 2, cv2.LINE_AA)
+
+        cv2.putText(frame, f"Hands: {len(hands)}  |  State: {gesture_info.get('state', 'UNKNOWN')}",
+                    (x1 + 12, y1 + 48), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (230, 230, 240), 1, cv2.LINE_AA)
+
+        # Gojo metrics
+        gojo_m = gesture_info.get("metrics", {}).get("gojo", {})
+        gojo_s = gesture_info.get("gojo_score", 0.0)
+        cv2.putText(frame, f"-- GOJO TAISHAKUTEN ({int(gojo_s * 100)}%) --", (x1 + 12, y1 + 76),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 100, 220), 1, cv2.LINE_AA)
+
+        if hands:
+            h0 = hands[0]
+            cr = h0.get("cross_ratio", 1.0)
+            is_cross = h0.get("is_crossing_mudra", False)
+            yn = h0.get("palm_y_norm", 0.5)
+            i_ang = h0.get("finger_angles", {}).get("index", 0)
+            m_ang = h0.get("finger_angles", {}).get("middle", 0)
+            r_ang = h0.get("finger_angles", {}).get("ring", 180)
+            p_ang = h0.get("finger_angles", {}).get("pinky", 180)
+
+            c_tag = "MATCH (<0.40)" if cr < 0.40 else "FAIL (>0.40)"
+            cv2.putText(frame, f"Cross Ratio : {cr:.2f} [{c_tag}]", (x1 + 16, y1 + 96),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.36, (80, 255, 120) if cr < 0.40 else (120, 120, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, f"Fingers Crossed: {is_cross}  |  Y-pos: {yn:.2f} (<0.68)", (x1 + 16, y1 + 114),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.34, (200, 200, 220), 1, cv2.LINE_AA)
+            cv2.putText(frame, f"Idx:{i_ang:.0f} Mid:{m_ang:.0f}  Rng:{r_ang:.0f} Pnk:{p_ang:.0f}",
+                        (x1 + 16, y1 + 132), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (180, 180, 200), 1, cv2.LINE_AA)
+        else:
+            cv2.putText(frame, "No hand visible for Gojo", (x1 + 16, y1 + 96),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.34, (160, 160, 170), 1, cv2.LINE_AA)
+
+        # Sukuna metrics
+        sukuna_m = gesture_info.get("metrics", {}).get("sukuna", {})
+        sukuna_s = gesture_info.get("sukuna_score", 0.0)
+        cv2.putText(frame, f"-- SUKUNA ENMA-TEN ({int(sukuna_s * 100)}%) --", (x1 + 12, y1 + 165),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (80, 220, 255), 1, cv2.LINE_AA)
+
+        if len(hands) == 2:
+            p_dist = sukuna_m.get("palm_dist_ratio", 9.9)
+            i_dist = sukuna_m.get("index_dist_ratio", 9.9)
+            p_tag = "MATCH (<2.5)" if p_dist < 2.5 else "FAIL"
+            i_tag = "MATCH (<1.2)" if i_dist < 1.2 else "FAIL"
+            cv2.putText(frame, f"Palm Dist Ratio  : {p_dist:.2f} [{p_tag}]", (x1 + 16, y1 + 185),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.36, (80, 255, 120) if p_dist < 2.5 else (120, 120, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, f"Index Tip Ratio  : {i_dist:.2f} [{i_tag}]", (x1 + 16, y1 + 205),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.36, (80, 255, 120) if i_dist < 1.2 else (120, 120, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, f"Lower Curled     : {sukuna_m.get('curled_lower_count', 0)}/4 (Need >=3)",
+                        (x1 + 16, y1 + 225), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (200, 200, 220), 1, cv2.LINE_AA)
+        else:
+            cv2.putText(frame, f"Requires 2 hands (Currently {len(hands)})", (x1 + 16, y1 + 185),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.36, (100, 100, 255), 1, cv2.LINE_AA)
+
+        # Thresholds summary
+        cv2.line(frame, (x1 + 10, y1 + 250), (x2 - 10, y1 + 250), (60, 50, 75), 1)
+        cv2.putText(frame, "TARGET THRESHOLDS:", (x1 + 12, y1 + 270),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 230, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, "Activation : >= 72% for 10 frames", (x1 + 16, y1 + 290),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.34, (200, 200, 220), 1, cv2.LINE_AA)
+        cv2.putText(frame, "Deactivation : < 52% drops hold", (x1 + 16, y1 + 308),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.34, (200, 200, 220), 1, cv2.LINE_AA)
+        cv2.putText(frame, "Switching   : Mudra change resets count", (x1 + 16, y1 + 326),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.34, (200, 200, 220), 1, cv2.LINE_AA)
+
+    def _log_gesture_sample(self, hands: List[Dict[str, Any]], gesture_info: dict):
+        """Append lightweight structured observation to JSONL log file for offline debugging."""
+        if not self.log_file or not hands:
+            return
+        # Sample every 5 frames to keep logs lightweight
+        if self.total_frames % 5 != 0:
+            return
+
+        record = {
+            "time": round(time.time(), 3),
+            "frame": self.total_frames,
+            "hands_count": len(hands),
+            "state": gesture_info.get("state"),
+            "gojo_score": round(gesture_info.get("gojo_score", 0.0), 3),
+            "sukuna_score": round(gesture_info.get("sukuna_score", 0.0), 3),
+            "unknown_score": round(gesture_info.get("unknown_score", 0.0), 3),
+            "hands": [
+                {
+                    "handedness": h.get("handedness"),
+                    "palm_scale": round(h.get("palm_scale", 0.0), 1),
+                    "cross_ratio": round(h.get("cross_ratio", 0.0), 3),
+                    "is_crossing": h.get("is_crossing_mudra", False),
+                    "curl_ratios": {k: round(v, 2) for k, v in h.get("curl_ratios", {}).items()},
+                }
+                for h in hands
+            ],
+        }
+        try:
+            with open(self.log_file, "a") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception:
+            pass
 
     def _render_bottom_cam_display(self, frame: np.ndarray):
         """Displays user's live camera inset in bottom corner during animated demo feed."""
@@ -590,42 +778,35 @@ class DomainExpansionApp:
         x2 = x1 + pip_w
         y2 = y1 + pip_h
 
-        cam_frame = None
-        if self.pip_cap and self.pip_cap.isOpened():
-            ret_cam, raw_cam = self.pip_cap.read()
-            if ret_cam and raw_cam is not None:
-                cam_frame = cv2.resize(raw_cam, (pip_w, pip_h))
+        cam_frame = np.zeros((pip_h, pip_w, 3), dtype=np.uint8)
+        cam_frame[:, :] = (20, 14, 28)
+        cv2.line(cam_frame, (pip_w // 2, 20), (pip_w // 2, pip_h - 20), (55, 45, 70), 1)
+        cv2.line(cam_frame, (20, pip_h // 2), (pip_w - 20, pip_h // 2), (55, 45, 70), 1)
+        cv2.circle(cam_frame, (pip_w // 2, pip_h // 2), 26, (85, 65, 105), 1)
+        cv2.putText(cam_frame, "USER CAM DISPLAY", (pip_w // 2 - 60, pip_h // 2 - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (210, 190, 245), 1, cv2.LINE_AA)
+        cv2.putText(cam_frame, "Make Sukuna / Gojo Mudra", (pip_w // 2 - 76, pip_h // 2 + 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 230, 255), 1, cv2.LINE_AA)
 
-        if cam_frame is None:
-            # Stylized live camera preview slot
-            cam_frame = np.zeros((pip_h, pip_w, 3), dtype=np.uint8)
-            cam_frame[:, :] = (20, 14, 28)
-            # Viewfinder reticle
-            cv2.line(cam_frame, (pip_w // 2, 20), (pip_w // 2, pip_h - 20), (55, 45, 70), 1)
-            cv2.line(cam_frame, (20, pip_h // 2), (pip_w - 20, pip_h // 2), (55, 45, 70), 1)
-            cv2.circle(cam_frame, (pip_w // 2, pip_h // 2), 26, (85, 65, 105), 1)
-            cv2.putText(cam_frame, "USER CAM DISPLAY", (pip_w // 2 - 60, pip_h // 2 - 6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.36, (210, 190, 245), 1, cv2.LINE_AA)
-            cv2.putText(cam_frame, "Make Sukuna / Gojo Mudra", (pip_w // 2 - 76, pip_h // 2 + 15),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.30, (0, 230, 255), 1, cv2.LINE_AA)
-
-        # Composite bottom box into main frame
         frame[y1:y2, x1:x2] = cam_frame
-
-        # Styled neon border & header
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 230, 255), 2)
         cv2.rectangle(frame, (x1, y1), (x2, y1 + 22), (14, 10, 22), -1)
         cv2.rectangle(frame, (x1, y1), (x2, y1 + 22), (0, 230, 255), 1)
-        # Red live indicator
         cv2.circle(frame, (x1 + 12, y1 + 11), 4, (40, 40, 240), -1)
         cv2.putText(frame, "YOUR LIVE CAM DISPLAY", (x1 + 22, y1 + 15),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.34, (255, 255, 255), 1, cv2.LINE_AA)
 
-    def _render_hud(self, frame: np.ndarray, gesture_info: dict, q_level: str = "HIGH"):
-        """Renders anime-styled cyber/curse telemetry HUD with crystal-clear visibility."""
+    def _render_hud(
+        self,
+        frame: np.ndarray,
+        gesture_info: dict,
+        hands: Optional[List[Dict[str, Any]]] = None,
+        q_level: str = "HIGH",
+    ):
+        """Renders cyber/curse telemetry HUD with crystal-clear visibility and dual mudra meters."""
         h, w = frame.shape[:2]
-        hud_w, hud_h = 380, 140
-        # ROI alpha blending - avoids copying entire 1280x720 frame
+        hud_w, hud_h = 410, 165
+
         roi = frame[16:16 + hud_h, 16:16 + hud_w]
         dark_card = np.full_like(roi, (12, 8, 18))
         cv2.addWeighted(dark_card, 0.90, roi, 0.10, 0, roi)
@@ -633,58 +814,77 @@ class DomainExpansionApp:
 
         # Status & Domain
         status_color = (80, 255, 120) if self.state == "DOMAIN_ACTIVE" else ((80, 230, 255) if self.state == "CHARGING" else (240, 240, 240))
-        cv2.putText(frame, f"STATUS : {self.state}", (26, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, status_color, 2, cv2.LINE_AA)
-        cv2.putText(frame, f"DOMAIN : {self.env_renderer.theme['name_en']} ({self.env_renderer.theme['character']})",
-                    (26, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (215, 195, 255), 1, cv2.LINE_AA)
+        g_state = gesture_info.get("state", "UNKNOWN")
+        cv2.putText(frame, f"STATUS: {self.state}  |  GESTURE: {g_state}", (26, 38),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.44, status_color, 1, cv2.LINE_AA)
+        cv2.putText(frame, f"DOMAIN: {self.env_renderer.theme['name_en']} ({self.env_renderer.theme['character']})",
+                    (26, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (215, 195, 255), 1, cv2.LINE_AA)
+
+        # Mudra Meters (Dual Sukuna & Gojo Meters)
+        sukuna_pct = int(gesture_info.get("sukuna_score", 0.0) * 100)
+        gojo_pct = int(gesture_info.get("gojo_score", 0.0) * 100)
+        hands_cnt = len(hands) if hands else 0
+
+        # Sukuna Meter Bar
+        cv2.putText(frame, f"Sukuna: {sukuna_pct}%", (26, 76), cv2.FONT_HERSHEY_SIMPLEX, 0.34,
+                    (80, 255, 120) if sukuna_pct >= 72 else (180, 180, 190), 1, cv2.LINE_AA)
+        cv2.rectangle(frame, (115, 68), (225, 78), (35, 24, 46), -1)
+        s_fill = int(110 * (sukuna_pct / 100.0))
+        if s_fill > 0:
+            cv2.rectangle(frame, (115, 68), (115 + s_fill, 78), (80, 220, 255) if sukuna_pct < 72 else (80, 255, 120), -1)
+
+        # Gojo Meter Bar
+        cv2.putText(frame, f"Gojo: {gojo_pct}%", (240, 76), cv2.FONT_HERSHEY_SIMPLEX, 0.34,
+                    (80, 255, 120) if gojo_pct >= 72 else (180, 180, 190), 1, cv2.LINE_AA)
+        cv2.rectangle(frame, (315, 68), (410, 78), (35, 24, 46), -1)
+        g_fill = int(95 * (gojo_pct / 100.0))
+        if g_fill > 0:
+            cv2.rectangle(frame, (315, 68), (315 + g_fill, 78), (255, 100, 220) if gojo_pct < 72 else (80, 255, 120), -1)
 
         # Mudra Recognition Feedback
         status_text = gesture_info.get("status_text", "Make hand sign (Sukuna or Gojo)")
-        match_pct = gesture_info.get("match_pct", 0)
-        if gesture_info.get("sign_detected"):
-            bar_color = (80, 255, 130)
-        elif match_pct > 35:
-            bar_color = (80, 220, 255)
-        else:
-            bar_color = (180, 180, 190)
-
-        cv2.putText(frame, f"MUDRA  : {status_text}", (26, 80),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, bar_color, 1, cv2.LINE_AA)
+        cv2.putText(frame, f"MUDRA : {status_text}", (26, 100),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 230, 255), 1, cv2.LINE_AA)
 
         # Hold Progress Bar
         bar_bg_w = hud_w - 20
-        cv2.rectangle(frame, (26, 90), (26 + bar_bg_w, 100), (35, 24, 46), -1)
+        cv2.rectangle(frame, (26, 110), (26 + bar_bg_w, 120), (35, 24, 46), -1)
         fill_w = int(bar_bg_w * gesture_info.get("hold_progress", 0.0))
         if fill_w > 0:
             fill_col = (80, 235, 255) if gesture_info["hold_progress"] < 1.0 else (80, 255, 120)
-            cv2.rectangle(frame, (26, 90), (26 + fill_w, 100), fill_col, -1)
+            cv2.rectangle(frame, (26, 110), (26 + fill_w, 120), fill_col, -1)
 
-        # Prominent In-HUD Telemetry Line (Never overshadowed or hidden)
+        # Telemetry line
         fps_color = (80, 255, 120) if self.profiler.fps >= 30.0 else ((80, 230, 255) if self.profiler.fps >= 20.0 else (80, 80, 255))
-        # Quality level color: ULTRA=green, HIGH=cyan, MEDIUM=yellow, LOW=red
         q_colors = {"ULTRA": (80, 255, 80), "HIGH": (80, 230, 255), "MEDIUM": (80, 220, 200), "LOW": (80, 80, 255)}
         q_color = q_colors.get(q_level, (180, 180, 190))
+
         cv2.putText(frame,
-            f"PERF   : {self.profiler.fps:.1f} FPS  |  Trk: {self.profiler.track_ms:.0f}ms  |  Rdr: {self.profiler.render_ms:.0f}ms",
-            (26, 118), cv2.FONT_HERSHEY_SIMPLEX, 0.35, fps_color, 1, cv2.LINE_AA)
-        cv2.putText(frame, f"QUAL   : {q_level}",
-            (26, 134), cv2.FONT_HERSHEY_SIMPLEX, 0.35, q_color, 1, cv2.LINE_AA)
+            f"PERF  : {self.profiler.fps:.1f} FPS  |  Trk: {self.profiler.track_ms:.0f}ms  |  Rdr: {self.profiler.render_ms:.0f}ms",
+            (26, 138), cv2.FONT_HERSHEY_SIMPLEX, 0.34, fps_color, 1, cv2.LINE_AA)
 
-        # Top-Right Telemetry Badge (Auto-anchored with safe right padding)
+        h_info = f"Hands: {hands_cnt}"
+        if hands:
+            h_info += " (" + ", ".join([h.get("handedness", "?") for h in hands]) + ")"
+        cv2.putText(frame, f"INFO  : {h_info}  |  Qual: {q_level}",
+            (26, 154), cv2.FONT_HERSHEY_SIMPLEX, 0.34, q_color, 1, cv2.LINE_AA)
+
         self.profiler.draw_telemetry(frame)
-
 
     def run(self):
         print("\n=======================================================")
-        print("  DOMAINVISION - AR DOMAIN EXPANSION (領域展開)")
+        print("  DOMAINVISION - REAL-TIME AR DOMAIN EXPANSION (領域展開)")
         print("  Decoupled High-FPS Architecture & Canonical Audio Sync")
         print("=======================================================")
         print("  Hand Signs:")
-        print("    - Sukuna: Palms clasped, thumbs upright, index touching")
-        print("    - Gojo  : Index & Middle fingers crossed")
+        print("    - Sukuna: STRICTLY 2 HANDS clasped, thumbs upright, index touching")
+        print("    - Gojo  : Exactly 1 hand, index & middle crossed, head height")
         print("  Controls:")
-        print("    [1]         : Switch to Malevolent Shrine (伏魔御廚子 - Sukuna)")
-        print("    [2]         : Switch to Infinite Void (無量空処 - Gojo)")
+        print("    [C]         : Toggle Gesture Calibration Overlay")
+        print("    [L]         : Toggle 21-Landmark Skeleton Overlay")
+        print("    [M]         : Toggle Webcam Mirror Preview")
+        print("    [1]         : Switch to Malevolent Shrine (Sukuna)")
+        print("    [2]         : Switch to Infinite Void (Gojo)")
         print("    [D] / Space : Force Trigger Domain Expansion")
         print("    [R]         : Reset / Collapse Domain")
         print("    [H]         : Toggle HUD")
@@ -714,6 +914,15 @@ class DomainExpansionApp:
                     key = cv2.waitKey(1) & 0xFF
                     if key in [ord("q"), ord("Q"), 27]:
                         break
+                    elif key in [ord("c"), ord("C")]:
+                        self.calibrate_mode = not self.calibrate_mode
+                        print(f"Calibration Mode: {self.calibrate_mode}")
+                    elif key in [ord("l"), ord("L")]:
+                        self.show_landmarks = not self.show_landmarks
+                        print(f"Show Landmarks: {self.show_landmarks}")
+                    elif key in [ord("m"), ord("M")]:
+                        self.flip_webcam = not self.flip_webcam
+                        print(f"Webcam Mirror: {self.flip_webcam}")
                     elif key in [ord("d"), ord("D"), 32]:
                         self.trigger_domain()
                     elif key in [ord("r"), ord("R")]:
@@ -766,6 +975,10 @@ def main():
     parser.add_argument("--headless", action="store_true", help="Run without GUI display")
     parser.add_argument("--width", type=int, default=CAMERA_WIDTH, help="Camera width (default: 1280)")
     parser.add_argument("--height", type=int, default=CAMERA_HEIGHT, help="Camera height (default: 720)")
+    parser.add_argument("--calibrate", action="store_true", help="Launch in gesture calibration overlay mode")
+    parser.add_argument("--log-gestures", action="store_true", help="Log gesture observation samples to gesture_samples.jsonl")
+    parser.add_argument("--flip", action="store_true", default=True, help="Mirror webcam feed horizontally (default: True)")
+    parser.add_argument("--no-flip", action="store_false", dest="flip", help="Do not mirror webcam feed")
 
     args = parser.parse_args()
 
@@ -785,6 +998,9 @@ def main():
         headless=is_headless,
         record_path=record_path,
         max_frames=args.frames,
+        calibrate_mode=args.calibrate,
+        log_gestures=args.log_gestures,
+        flip_webcam=args.flip,
     )
     app.run()
 

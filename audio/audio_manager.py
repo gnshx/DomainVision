@@ -42,6 +42,12 @@ class AudioManager:
         self._sequence_start_time = 0.0
         self._scheduled_timers: List[threading.Timer] = []
 
+        # Persistent audio worker queue (eliminates thread spawning in frame loop)
+        import queue
+        self._audio_queue: queue.Queue = queue.Queue(maxsize=16)
+        self._audio_thread = threading.Thread(target=self._audio_loop, daemon=True)
+        self._audio_thread.start()
+
     def _detect_backend(self) -> str:
         if shutil.which("aplay"):
             return "aplay"
@@ -215,36 +221,47 @@ class AudioManager:
 
     # --- Non-Blocking Playback API ---
 
-    def play(self, sound_name: str):
-        """Play a sound effect immediately without blocking video loop."""
-        if sound_name not in self.sound_paths:
-            return
-
-        filepath = self.sound_paths[sound_name]
-
-        def _worker():
+    def _audio_loop(self):
+        """Dedicated background thread draining playback queue."""
+        while True:
             try:
-                if self.backend == "aplay":
-                    subprocess.run(
-                        ["aplay", "-q", filepath],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=False
-                    )
-                elif self.backend == "pw-play":
-                    subprocess.run(
-                        ["pw-play", filepath],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=False
-                    )
-                elif self.backend == "sounddevice" and hasattr(self, "sd") and self.sd:
-                    data = self.audio_data[sound_name].astype(np.float32) / 32767.0
-                    self.sd.play(data, self.SAMPLE_RATE)
+                sound_name = self._audio_queue.get()
+                if sound_name is None:
+                    break
+                if sound_name in self.sound_paths:
+                    filepath = self.sound_paths[sound_name]
+                    if self.backend == "aplay":
+                        subprocess.run(
+                            ["aplay", "-q", filepath],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=False,
+                        )
+                    elif self.backend == "pw-play":
+                        subprocess.run(
+                            ["pw-play", filepath],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=False,
+                        )
+                    elif self.backend == "sounddevice" and hasattr(self, "sd") and self.sd:
+                        try:
+                            data = self.audio_data[sound_name].astype(np.float32) / 32767.0
+                            self.sd.play(data, self.SAMPLE_RATE)
+                        except Exception:
+                            pass
+                self._audio_queue.task_done()
             except Exception:
                 pass
 
-        threading.Thread(target=_worker, daemon=True).start()
+    def play(self, sound_name: str):
+        """Enqueue sound effect instantaneously (< 0.005ms) without spawning threads."""
+        if sound_name not in self.sound_paths:
+            return
+        try:
+            self._audio_queue.put_nowait(sound_name)
+        except Exception:
+            pass
 
     def start_domain_sequence(self, theme: str = "malevolent_shrine"):
         """
