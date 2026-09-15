@@ -347,7 +347,7 @@ class DomainExpansionApp:
                 self.state = "NORMAL"
                 self.gesture_recognizer.reset()
 
-    def process_frame(self, raw_frame: np.ndarray) -> np.ndarray:
+    def process_frame(self, raw_frame: np.ndarray, external_tracking: Optional[dict] = None) -> np.ndarray:
         self.profiler.start_frame()
 
         if not self.is_demo and self.flip_webcam:
@@ -361,17 +361,16 @@ class DomainExpansionApp:
         col_pri = theme_info["primary_bgr"]
         col_sec = theme_info["secondary_bgr"]
 
-        # 1. Decoupled Vision Tracking (Non-blocking async query)
-        self.profiler.start_tracking()
-        tracking = self.tracker.process(raw_frame)
-        self.profiler.end_tracking()
+        # 1. Decoupled Vision Tracking (Non-blocking async query or pre-tracked slot)
+        if external_tracking is not None:
+            tracking = external_tracking
+        else:
+            self.profiler.start_tracking()
+            tracking = self.tracker.process(raw_frame)
+            self.profiler.end_tracking()
 
         person_mask = tracking["mask"]
         hands = tracking["hands"]
-
-        if hasattr(self, "_cached_webcam_hands") and self._cached_webcam_hands:
-            hands = self._cached_webcam_hands
-            self._cached_webcam_hands = []
 
         if self.is_demo and len(hands) == 0:
             # Only synthesize skeletal energy joints when domain is ALREADY active or triggered

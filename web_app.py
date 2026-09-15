@@ -30,12 +30,23 @@ class CursedARWebServer:
         self.lock = threading.Lock()
         self.last_action = None
 
+    def _handle_action(self, action: str):
+        if action == "expand":
+            self.app.trigger_domain()
+        elif action == "reset":
+            self.app.reset_domain()
+        elif action == "theme_sukuna":
+            self.app.set_theme("malevolent_shrine")
+        elif action == "theme_gojo":
+            self.app.set_theme("infinite_void")
+        elif action == "toggle_landmarks":
+            self.app.show_landmarks = not self.app.show_landmarks
+        elif action == "toggle_calibration":
+            self.app.show_calibration = not self.app.show_calibration
+
     def process_image(self, input_bgr: np.ndarray, action: str = "") -> np.ndarray:
         with self.lock:
-            if action == "expand":
-                self.app.trigger_domain()
-            elif action == "reset":
-                self.app.reset_domain()
+            self._handle_action(action)
 
             if input_bgr.shape[1] != self.width or input_bgr.shape[0] != self.height:
                 input_bgr = cv2.resize(input_bgr, (self.width, self.height))
@@ -44,16 +55,15 @@ class CursedARWebServer:
 
     def process_demo_frame(self, user_cam_bgr: Optional[np.ndarray] = None, action: str = "") -> np.ndarray:
         with self.lock:
-            if action == "expand":
-                self.app.trigger_domain()
-            elif action == "reset":
-                self.app.reset_domain()
+            self._handle_action(action)
 
+            external_tracking = None
             if user_cam_bgr is not None:
                 if user_cam_bgr.shape[1] != self.width or user_cam_bgr.shape[0] != self.height:
                     user_cam_bgr = cv2.resize(user_cam_bgr, (self.width, self.height))
-                user_tracking = self.app.tracker.process(user_cam_bgr)
-                self.app._cached_webcam_hands = user_tracking.get("hands", [])
+                self.app.profiler.start_tracking()
+                external_tracking = self.app.tracker.process(user_cam_bgr)
+                self.app.profiler.end_tracking()
 
             ret, demo_raw = self.demo_cam.read()
             if not ret or demo_raw is None:
@@ -61,7 +71,7 @@ class CursedARWebServer:
                 _, demo_raw = self.demo_cam.read()
 
             self.demo_cam.set_state(self.app.state)
-            return self.app.process_frame(demo_raw)
+            return self.app.process_frame(demo_raw, external_tracking=external_tracking)
 
 
 SERVER_INSTANCE = None
@@ -84,6 +94,7 @@ class ARStreamHandler(BaseHTTPRequestHandler):
         match_val = str(rec.last_match_pct)
         sukuna_match = str(getattr(rec, "last_sukuna_pct", 0))
         gojo_match = str(getattr(rec, "last_gojo_pct", 0))
+        hands_cnt = str(len(getattr(rec, "last_hands", [])))
 
         self.send_header("X-FPS", fps_val)
         self.send_header("X-Theme", theme_val)
@@ -92,7 +103,8 @@ class ARStreamHandler(BaseHTTPRequestHandler):
         self.send_header("X-Match", match_val)
         self.send_header("X-Sukuna-Match", sukuna_match)
         self.send_header("X-Gojo-Match", gojo_match)
-        self.send_header("Access-Control-Expose-Headers", "X-FPS, X-Theme, X-State, X-Sign, X-Match, X-Sukuna-Match, X-Gojo-Match")
+        self.send_header("X-Hands-Count", hands_cnt)
+        self.send_header("Access-Control-Expose-Headers", "X-FPS, X-Theme, X-State, X-Sign, X-Match, X-Sukuna-Match, X-Gojo-Match, X-Hands-Count")
 
     def do_GET(self):
         global SERVER_INSTANCE
@@ -466,37 +478,41 @@ class ARStreamHandler(BaseHTTPRequestHandler):
         <div class="controls">
             <button class="btn btn-expand" onclick="triggerAction('expand')">⚡ Force Expand (領域展開)</button>
             <button class="btn btn-reset" onclick="triggerAction('reset')">🔄 Collapse / Reset</button>
+            <button class="btn" style="background: rgba(180, 20, 50, 0.4); border-color: #ff4d6d;" onclick="triggerAction('theme_sukuna')">🩸 Sukuna</button>
+            <button class="btn" style="background: rgba(120, 40, 200, 0.4); border-color: #c77dff;" onclick="triggerAction('theme_gojo')">🌌 Gojo</button>
+            <button class="btn" id="btn-skeleton" onclick="triggerAction('toggle_landmarks')">🦴 Skeleton</button>
+            <button class="btn" id="btn-calibration" onclick="triggerAction('toggle_calibration')">📐 Calibration</button>
             <button class="btn" onclick="saveSnapshot()">📸 Snapshot</button>
         </div>
 
         <div class="status-bar">
             <div class="status-badge">
-                <span class="auto-tag">⚡ AUTO-THEME</span>
-                <span id="status-text">Form Sukuna or Gojo hand sign with fingers</span>
+                <span class="auto-tag" id="state-tag">NORMAL</span>
+                <span id="status-text">Form Sukuna (2 hands) or Gojo (1 hand) mudra</span>
             </div>
             <div id="fps-stat" style="font-weight: 700; color: #39ff14;">PIPELINE: ACTIVE</div>
         </div>
     </div>
 
-    <!-- Dual Mudra Finger Signs Section (Both evaluated automatically) -->
+    <!-- Dual Mudra Finger Signs Section (Both evaluated automatically, clickable to manually select) -->
     <div class="mudra-section">
-        <div class="mudra-card active-card" id="card-sukuna">
+        <div class="mudra-card active-card" id="card-sukuna" style="cursor: pointer;" onclick="triggerAction('theme_sukuna')" title="Click to switch to Malevolent Shrine">
             <div class="mudra-title" style="color: #ff4d6d;">
                 <span>🩸 閻魔天印 (Sukuna)</span>
                 <span class="match-badge" id="badge-sukuna">0%</span>
             </div>
             <div class="mudra-desc">
-                Clasp both palms together in front of chest. Keep <strong>thumbs upright</strong>, touch <strong>index fingertips</strong>, curl ring & pinky fingers inward.
+                Clasp <strong>strictly 2 hands</strong> together in front of chest. Keep <strong>thumbs upright</strong>, touch <strong>index fingertips</strong>, curl ring & pinky fingers inward.
             </div>
         </div>
 
-        <div class="mudra-card" id="card-void">
+        <div class="mudra-card" id="card-void" style="cursor: pointer;" onclick="triggerAction('theme_gojo')" title="Click to switch to Infinite Void">
             <div class="mudra-title" style="color: #c77dff;">
                 <span>🌌 帝釈天印 (Gojo)</span>
                 <span class="match-badge" id="badge-void">0%</span>
             </div>
             <div class="mudra-desc">
-                Single hand raised vertically. <strong>Cross middle finger over index finger</strong> with ring and pinky fingers folded tight into palm.
+                <strong>Exactly 1 hand</strong> raised to head height. <strong>Cross middle finger over index finger</strong> with ring and pinky fingers folded tight into palm.
             </div>
         </div>
     </div>
@@ -641,10 +657,12 @@ class ARStreamHandler(BaseHTTPRequestHandler):
                         // Read telemetry headers from server
                         const serverFps = response.headers.get("X-FPS");
                         const serverTheme = response.headers.get("X-Theme") || "malevolent_shrine";
+                        const serverState = response.headers.get("X-State") || "NORMAL";
                         const serverSign = decodeURIComponent(response.headers.get("X-Sign") || "");
                         const serverMatch = parseInt(response.headers.get("X-Match") || "0");
                         const sukunaMatch = parseInt(response.headers.get("X-Sukuna-Match") || "0");
                         const gojoMatch = parseInt(response.headers.get("X-Gojo-Match") || "0");
+                        const handsCnt = parseInt(response.headers.get("X-Hands-Count") || "0");
 
                         // Update floating HUD telemetry
                         frameCount++;
@@ -673,8 +691,20 @@ class ARStreamHandler(BaseHTTPRequestHandler):
                             cardSukuna.classList.remove('active-card');
                         }
 
+                        // State tag & status text
+                        const stateTag = document.getElementById("state-tag");
+                        if (stateTag) {
+                            stateTag.innerText = serverState;
+                            if (serverState === "NORMAL") stateTag.style.borderColor = "rgba(0, 240, 255, 0.5)";
+                            else if (serverState === "CHARGING") stateTag.style.borderColor = "#ffaa00";
+                            else if (serverState === "EXPANSION" || serverState === "DOMAIN_ACTIVE") stateTag.style.borderColor = "#ff0055";
+                            else if (serverState === "COLLAPSE") stateTag.style.borderColor = "#9d4edd";
+                        }
+
                         if (serverSign) {
-                            statusText.innerText = `${serverSign} (${serverMatch}%)`;
+                            statusText.innerText = `${serverSign} (${serverMatch}%) • Hands: ${handsCnt}`;
+                        } else {
+                            statusText.innerText = `Tracking: ${handsCnt} hand(s) detected • ${serverTheme === 'malevolent_shrine' ? 'Sukuna' : 'Gojo'} mode`;
                         }
 
                         const imgBlob = await response.blob();
