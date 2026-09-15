@@ -84,6 +84,9 @@ class CameraMotionEstimator:
             (dx, dy) in full-resolution pixels, EMA-smoothed.
         """
         self._frame_counter += 1
+        if self._frame_counter % 2 != 0 and self._prev_pts is not None:
+            return self._smooth_dx, self._smooth_dy
+
         gray = self._downscale(frame_bgr)
 
         raw_dx, raw_dy = 0.0, 0.0
