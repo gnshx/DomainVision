@@ -59,6 +59,8 @@ class CanonicalGestureRecognizer:
         self.last_sukuna_pct = 0
         self.last_match_pct = 0
         self.detected_sign_name = ""
+        self.last_hands: List[Dict[str, Any]] = []
+        self.last_hands_count = 0
 
         # Rolling observation history for temporal filtering
         self._history: deque = deque(maxlen=history_len)
@@ -342,6 +344,9 @@ class CanonicalGestureRecognizer:
         if self.transition_timer > 0:
             self.transition_timer -= 1
 
+        self.last_hands = hands
+        self.last_hands_count = len(hands)
+
         # 1. Evaluate both mudras independently
         score_gojo, center_gojo, metrics_gojo = self.evaluate_gojo_mudra(hands, frame_shape)
         score_sukuna, center_sukuna, metrics_sukuna = self.evaluate_sukuna_mudra(hands, frame_shape)
@@ -475,6 +480,7 @@ class CanonicalGestureRecognizer:
             "stable_frames": self.stable_frames,
             "required_frames": self.hold_frames_required,
             "trigger": triggered,
+            "hands_count": len(hands),
             "energy_center": active_center or fallback_center,
             "metrics": {
                 "gojo": metrics_gojo,

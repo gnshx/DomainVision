@@ -199,6 +199,23 @@ class TestGestureRecognizer(unittest.TestCase):
         self.assertEqual(res["state"], "SUKUNA_CONFIRMED")
         self.assertTrue(res["trigger"])
 
+    def test_hands_count_telemetry(self):
+        """Test G: Hands count telemetry is correctly updated and exposed."""
+        h1 = create_mock_hand(palm_center=(600, 300))
+        h2 = create_mock_hand(palm_center=(680, 300))
+
+        res0 = self.rec.update(hands=[], frame_shape=(720, 1280))
+        self.assertEqual(res0["hands_count"], 0)
+        self.assertEqual(self.rec.last_hands_count, 0)
+
+        res1 = self.rec.update(hands=[h1], frame_shape=(720, 1280))
+        self.assertEqual(res1["hands_count"], 1)
+        self.assertEqual(self.rec.last_hands_count, 1)
+
+        res2 = self.rec.update(hands=[h1, h2], frame_shape=(720, 1280))
+        self.assertEqual(res2["hands_count"], 2)
+        self.assertEqual(self.rec.last_hands_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
