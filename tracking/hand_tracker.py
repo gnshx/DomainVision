@@ -44,14 +44,26 @@ class AdvancedHandTracker:
     def __init__(self, smoothing_alpha: float = SMOOTHING_ALPHA):
         self.smoothers = [LandmarkSmoother(alpha=smoothing_alpha), LandmarkSmoother(alpha=smoothing_alpha)]
 
-    def analyze_hand(self, raw_landmarks: List[Any], frame_shape: Tuple[int, int], hand_idx: int = 0) -> Dict[str, Any]:
+    def analyze_hand(
+        self,
+        raw_landmarks: List[Any],
+        frame_shape: Tuple[int, int],
+        hand_idx: int = 0,
+        handedness: str = "Unknown",
+        handedness_conf: float = 1.0,
+    ) -> Dict[str, Any]:
         """
-        Takes raw MediaPipe landmarks, smooths them, and calculates finger joint angles.
+        Takes raw MediaPipe landmarks, smooths them, and calculates invariant geometric features:
+        - Scale-normalized coordinates and palm reference frame
+        - 3D joint angles and finger curl ratios
+        - Exact middle-crossing-index metric for Gojo
+        - Thumb tuck/fold and palm orientation
+        - Bounding box and frame-relative vertical position
         """
         h, w = frame_shape[:2]
 
         # Convert normalized coordinates to pixel/3D space
-        points_3d = [(lm.x * w, lm.y * h, lm.z * w) for lm in raw_landmarks]
+        points_3d = [(float(lm.x * w), float(lm.y * h), float(lm.z * w)) for lm in raw_landmarks]
 
         # Apply temporal smoothing
         if hand_idx < len(self.smoothers):
@@ -59,37 +71,8 @@ class AdvancedHandTracker:
         else:
             smoothed_2d = [(int(p[0]), int(p[1])) for p in points_3d]
 
-        # Compute finger angles and states
-        finger_states = {}
-        finger_angles = {}
-
         wrist_3d = points_3d[0]
-
-        for fname, joints in self.FINGER_JOINTS.items():
-            if fname == "thumb":
-                # Thumb angle between CMC, MCP, IP
-                ang1 = compute_angle_3d(points_3d[joints[0]], points_3d[joints[1]], points_3d[joints[2]])
-                ang2 = compute_angle_3d(points_3d[joints[1]], points_3d[joints[2]], points_3d[joints[3]])
-                mean_ang = (ang1 + ang2) / 2.0
-                tip_dist = math.dist(points_3d[joints[3]][:2], wrist_3d[:2])
-                mcp_dist = math.dist(points_3d[joints[1]][:2], wrist_3d[:2])
-                is_extended = (mean_ang > 140.0) and (tip_dist > mcp_dist * 1.1)
-                is_curled = (mean_ang < 115.0) or (tip_dist < mcp_dist)
-            else:
-                # Finger angle at PIP (MCP, PIP, DIP) and DIP (PIP, DIP, TIP)
-                ang_pip = compute_angle_3d(points_3d[joints[0]], points_3d[joints[1]], points_3d[joints[2]])
-                ang_dip = compute_angle_3d(points_3d[joints[1]], points_3d[joints[2]], points_3d[joints[3]])
-                mean_ang = (ang_pip + ang_dip) / 2.0
-
-                tip_dist = math.dist(points_3d[joints[3]][:2], wrist_3d[:2])
-                pip_dist = math.dist(points_3d[joints[1]][:2], wrist_3d[:2])
-
-                is_extended = (mean_ang >= FINGER_EXTENDED_ANGLE) and (tip_dist > pip_dist)
-                is_curled = (mean_ang <= FINGER_CURLED_ANGLE) or (tip_dist < pip_dist * 0.92)
-
-            state = "EXTENDED" if is_extended else ("CURLED" if is_curled else "BENT")
-            finger_states[fname] = state
-            finger_angles[fname] = mean_ang
+        wrist_2d = smoothed_2d[0]
 
         # Palm center & scale
         palm_x = int((smoothed_2d[0][0] + smoothed_2d[5][0] + smoothed_2d[17][0]) / 3.0)
@@ -97,12 +80,67 @@ class AdvancedHandTracker:
         palm_center = (palm_x, palm_y)
         palm_scale = max(10.0, math.dist(smoothed_2d[0], smoothed_2d[9]))  # wrist to middle MCP distance
 
-        # Hand direction vector / Wrist orientation (wrist to middle MCP)
-        dir_x = smoothed_2d[9][0] - smoothed_2d[0][0]
-        dir_y = smoothed_2d[9][1] - smoothed_2d[0][1]
-        dir_len = math.hypot(dir_x, dir_y) + 1e-5
-        pointing_dir = (dir_x / dir_len, dir_y / dir_len)
+        # Hand reference vectors: Longitudinal (wrist -> middle MCP) and Transverse (pinky MCP -> index MCP)
+        long_vec = np.array([points_3d[9][0] - points_3d[0][0], points_3d[9][1] - points_3d[0][1], points_3d[9][2] - points_3d[0][2]], dtype=np.float32)
+        long_len = np.linalg.norm(long_vec) + 1e-6
+        u_long = long_vec / long_len
+
+        trans_vec = np.array([points_3d[5][0] - points_3d[17][0], points_3d[5][1] - points_3d[17][1], points_3d[5][2] - points_3d[17][2]], dtype=np.float32)
+        trans_len = np.linalg.norm(trans_vec) + 1e-6
+        u_trans = trans_vec / trans_len
+
+        # 3D Palm normal vector: cross product of u_long and u_trans
+        norm_v = np.cross(u_long, u_trans)
+        norm_len = np.linalg.norm(norm_v) + 1e-6
+        palm_normal = (float(norm_v[0] / norm_len), float(norm_v[1] / norm_len), float(norm_v[2] / norm_len))
+
+        # Hand direction vector / Wrist orientation (2D)
+        dir_x = (smoothed_2d[9][0] - smoothed_2d[0][0]) / (long_len + 1e-5)
+        dir_y = (smoothed_2d[9][1] - smoothed_2d[0][1]) / (long_len + 1e-5)
+        pointing_dir = (float(dir_x), float(dir_y))
         wrist_orientation = pointing_dir
+
+        # Compute finger angles, curl ratios, and states
+        finger_states = {}
+        finger_angles = {}
+        curl_ratios = {}
+
+        for fname, joints in self.FINGER_JOINTS.items():
+            if fname == "thumb":
+                ang1 = compute_angle_3d(points_3d[joints[0]], points_3d[joints[1]], points_3d[joints[2]])
+                ang2 = compute_angle_3d(points_3d[joints[1]], points_3d[joints[2]], points_3d[joints[3]])
+                mean_ang = (ang1 + ang2) / 2.0
+                tip_dist = math.dist(points_3d[joints[3]][:2], wrist_3d[:2])
+                mcp_dist = max(5.0, math.dist(points_3d[joints[1]][:2], wrist_3d[:2]))
+                c_ratio = tip_dist / mcp_dist
+
+                is_extended = (mean_ang > 138.0) and (c_ratio > 1.15)
+                is_curled = (mean_ang < 118.0) or (c_ratio < 0.95)
+            else:
+                ang_pip = compute_angle_3d(points_3d[joints[0]], points_3d[joints[1]], points_3d[joints[2]])
+                ang_dip = compute_angle_3d(points_3d[joints[1]], points_3d[joints[2]], points_3d[joints[3]])
+                mean_ang = (ang_pip + ang_dip) / 2.0
+
+                tip_dist = math.dist(points_3d[joints[3]][:2], wrist_3d[:2])
+                pip_dist = max(5.0, math.dist(points_3d[joints[1]][:2], wrist_3d[:2]))
+                c_ratio = tip_dist / pip_dist
+
+                is_extended = (mean_ang >= FINGER_EXTENDED_ANGLE) and (c_ratio > 1.35)
+                is_curled = (mean_ang <= FINGER_CURLED_ANGLE) or (c_ratio < 1.05)
+
+            state = "EXTENDED" if is_extended else ("CURLED" if is_curled else "BENT")
+            finger_states[fname] = state
+            finger_angles[fname] = mean_ang
+            curl_ratios[fname] = c_ratio
+
+        # Normalized coordinates relative to palm frame: origin at wrist
+        normalized_local_lms = []
+        for p in points_3d:
+            rel = np.array([p[0] - wrist_3d[0], p[1] - wrist_3d[1], p[2] - wrist_3d[2]], dtype=np.float32)
+            coord_trans = float(np.dot(rel, u_trans) / palm_scale)
+            coord_long = float(np.dot(rel, u_long) / palm_scale)
+            coord_norm = float(np.dot(rel, norm_v / norm_len) / palm_scale)
+            normalized_local_lms.append((coord_trans, coord_long, coord_norm))
 
         # Inter-finger distances (normalized by palm scale)
         inter_finger_dists = {
@@ -113,24 +151,64 @@ class AdvancedHandTracker:
             "thumb_to_pinky": math.dist(smoothed_2d[4], smoothed_2d[20]) / palm_scale,
         }
 
-        # 3D Palm normal vector: cross product of (wrist->middle_mcp) and (pinky_mcp->index_mcp)
-        v_long = np.array([points_3d[9][0] - points_3d[0][0], points_3d[9][1] - points_3d[0][1], points_3d[9][2] - points_3d[0][2]], dtype=np.float32)
-        v_lat = np.array([points_3d[5][0] - points_3d[17][0], points_3d[5][1] - points_3d[17][1], points_3d[5][2] - points_3d[17][2]], dtype=np.float32)
-        norm_v = np.cross(v_long, v_lat)
-        norm_len = np.linalg.norm(norm_v) + 1e-6
-        palm_normal = (float(norm_v[0] / norm_len), float(norm_v[1] / norm_len), float(norm_v[2] / norm_len))
+        # Thumb fold metric: distance from thumb tip to palm center and ring MCP
+        thumb_to_palm_dist = math.dist(smoothed_2d[4], palm_center) / palm_scale
+        thumb_to_ring_mcp = math.dist(smoothed_2d[4], smoothed_2d[13]) / palm_scale
+        thumb_tucked = (thumb_to_palm_dist < 0.72) or (thumb_to_ring_mcp < 0.78) or (finger_states["thumb"] == "CURLED")
+
+        # Canonical Gojo Crossing Metric:
+        # Distance between Index TIP (LM 8) and Middle TIP (LM 12)
+        index_tip_2d = smoothed_2d[8]
+        middle_tip_2d = smoothed_2d[12]
+        tip_cross_dist = math.dist(index_tip_2d, middle_tip_2d)
+        cross_ratio = tip_cross_dist / palm_scale
+
+        # Transverse overlap: in local palm frame, compare transverse position of tip 8 vs tip 12
+        trans_idx_tip = normalized_local_lms[8][0]
+        trans_mid_tip = normalized_local_lms[12][0]
+        trans_idx_mcp = normalized_local_lms[5][0]
+        trans_mid_mcp = normalized_local_lms[9][0]
+
+        # In natural uncrossed hand, index is on the index-MCP side of middle.
+        # When crossed, tips swap relative transverse positions or get extremely close (< 0.38 scale)
+        base_sign = 1.0 if (trans_idx_mcp > trans_mid_mcp) else -1.0
+        tip_sign = 1.0 if (trans_idx_tip > trans_mid_tip) else -1.0
+        is_crossed_swap = (base_sign * tip_sign < 0.0)
+
+        is_crossing_mudra = (
+            cross_ratio < 0.40
+            and finger_states["index"] == "EXTENDED"
+            and finger_states["middle"] == "EXTENDED"
+        ) or (is_crossed_swap and cross_ratio < 0.55)
+
+        # Bounding Box
+        xs = [p[0] for p in smoothed_2d]
+        ys = [p[1] for p in smoothed_2d]
+        bbox = (max(0, min(xs)), max(0, min(ys)), min(w - 1, max(xs)), min(h - 1, max(ys)))
+
+        # Frame-relative vertical position (0.0 = top of screen, 1.0 = bottom)
+        palm_y_norm = float(palm_center[1] / float(h))
 
         return {
             "landmarks": smoothed_2d,
             "raw_3d": points_3d,
+            "normalized_lms": normalized_local_lms,
             "palm_center": palm_center,
             "palm_scale": palm_scale,
+            "palm_y_norm": palm_y_norm,
             "pointing_dir": pointing_dir,
             "wrist_orientation": wrist_orientation,
             "palm_normal": palm_normal,
             "inter_finger_dists": inter_finger_dists,
             "finger_states": finger_states,
             "finger_angles": finger_angles,
+            "curl_ratios": curl_ratios,
+            "cross_ratio": cross_ratio,
+            "is_crossing_mudra": is_crossing_mudra,
+            "thumb_tucked": thumb_tucked,
+            "handedness": handedness,
+            "handedness_conf": handedness_conf,
+            "bbox": bbox,
             "wrist": smoothed_2d[0],
             "thumb_tip": smoothed_2d[4],
             "index_tip": smoothed_2d[8],

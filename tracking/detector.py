@@ -199,23 +199,20 @@ class MediaPipeVisionTracker:
                 if seg_res and seg_res.confidence_masks:
                     conf = seg_res.confidence_masks[0].numpy_view().squeeze()
                     mask_down = np.clip(conf * 255.0, 0, 255).astype(np.uint8)
-                    # Upscale mask to full original resolution
-                    mask_full = cv2.resize(mask_down, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
 
-                    # Morphological cleanup: remove isolated noise pixels, fill small holes
-                    # Using small (3x3) kernel to preserve thin structures (fingers, hair)
-                    mask_clean = cv2.morphologyEx(mask_full, cv2.MORPH_OPEN, self._morph_kernel)
+                    # Morphological cleanup on downscaled mask (0.05ms vs 3.5ms full-res)
+                    mask_clean = cv2.morphologyEx(mask_down, cv2.MORPH_OPEN, self._morph_kernel)
                     mask_clean = cv2.morphologyEx(mask_clean, cv2.MORPH_CLOSE, self._morph_kernel)
 
-                    # Temporal EMA stabilization: blend with previous stable mask
-                    # EMA alpha=0.45 means new frame contributes 45%, previous 55%
-                    # This smooths per-frame boundary flicker without introducing lag
+                    # Temporal EMA stabilization on downscaled float surface
                     if self._stable_mask is None or self._stable_mask.shape != mask_clean.shape:
                         self._stable_mask = mask_clean.astype(np.float32)
                     else:
                         self._stable_mask = 0.55 * self._stable_mask + 0.45 * mask_clean.astype(np.float32)
 
-                    self._cached_mask = np.clip(self._stable_mask, 0, 255).astype(np.uint8)
+                    mask_stable_uint8 = np.clip(self._stable_mask, 0, 255).astype(np.uint8)
+                    # Upscale stabilized mask to full resolution once
+                    self._cached_mask = cv2.resize(mask_stable_uint8, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
             except Exception:
                 pass
 
@@ -229,9 +226,20 @@ class MediaPipeVisionTracker:
             try:
                 hand_res = self.hand_landmarker.detect(mp_image)
                 if hand_res and hand_res.hand_landmarks:
+                    handedness_list = getattr(hand_res, "handedness", None)
                     for idx, hand_lms in enumerate(hand_res.hand_landmarks):
+                        h_label = "Unknown"
+                        h_conf = 1.0
+                        if handedness_list and idx < len(handedness_list) and handedness_list[idx]:
+                            h_label = handedness_list[idx][0].category_name
+                            h_conf = float(handedness_list[idx][0].score)
+
                         analyzed = self.hand_analyzer.analyze_hand(
-                            hand_lms, (orig_h, orig_w), hand_idx=idx
+                            hand_lms,
+                            (orig_h, orig_w),
+                            hand_idx=idx,
+                            handedness=h_label,
+                            handedness_conf=h_conf,
                         )
                         result["hands"].append(analyzed)
                 else:
