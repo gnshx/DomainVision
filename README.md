@@ -1,258 +1,291 @@
 <div align="center">
 
 # ⛩️ DomainVision (領域展開)
-### Real-Time Augmented Reality Engine & Canonical Hand-Sign Recognition
+### Real-Time Jujutsu Kaisen AR Engine & Invariant Mudra Classifier
 
-[![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![OpenCV](https://img.shields.io/badge/OpenCV-4.8%2B-5C3EE8.svg)](https://opencv.org/)
-[![MediaPipe](https://img.shields.io/badge/MediaPipe-Tasks%20Vision-0078D7.svg)](https://developers.google.com/mediapipe)
-[![Performance](https://img.shields.io/badge/Performance-30%E2%80%9360%2B%20FPS-00C853.svg)](#-performance-benchmarks)
+[![MediaPipe](https://img.shields.io/badge/MediaPipe-1.0%2B-0078D7.svg)](https://developers.google.com/mediapipe)
+[![Benchmarks](https://img.shields.io/badge/Benchmark-35.8%20FPS%20Sync%20%7C%2050%2B%20FPS%20Decoupled-00C853.svg)](PERFORMANCE_BASELINE.md)
+[![Tests](https://img.shields.io/badge/Tests-Passing%20(6%2F6)-brightgreen.svg)](tests/test_gestures.py)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-*An authentic, cinematic **Jujutsu Kaisen**-inspired Domain Expansion AR pipeline featuring 21-joint 3D finger kinematics, neural silhouette segmentation, SIMD bitwise compositing, and canonical acoustic synchronization.*
+*An authentic, cinematic **Jujutsu Kaisen**-inspired Domain Expansion AR pipeline featuring invariant multi-class hand-sign recognition, SIMD-accelerated effects, neural selfie segmentation, and canonical audio synchronization.*
 
-[Key Features](#-key-features) • [Architecture](#-system-architecture) • [Mudra Recognition](#-canonical-mudra-recognition) • [Quickstart](#-quickstart) • [Web Application](#-web-application--remote-ssh) • [Performance](#-performance-benchmarks) • [Controls](#-interactive-controls)
+[Key Features](#-key-features) • [System Architecture](#-system-architecture) • [Mudra Recognition](#-canonical-mudra-recognition) • [Performance Benchmarks](#-performance-benchmarks) • [Quickstart](#-quickstart) • [Web Application](#-web-application--remote-ssh) • [Calibration & Debugging](#-calibration--debugging) • [Controls](#-interactive-controls)
 
 ---
 
 </div>
 
-## 🌟 Overview
+## 🌟 Key Features
 
-**DomainVision** is a high-performance computer vision application that brings the iconic *Jujutsu Kaisen* "Domain Expansion" (領域展開) technique to life. Rather than relying on simple 2D overlays or arbitrary gesture classifiers, DomainVision implements:
+**DomainVision** transforms physical hand gestures into cinematic Jujutsu Kaisen "Domain Expansion" (領域展開) techniques in real-time.
 
-- **Mathematical Joint Kinematics**: Computes 3D vector cosine angles across all 21 finger joints to recognize canonical Buddhist mudras (Enma-ten & Taishakuten).
-- **Simultaneous Dual-Sign Tracking**: Dynamically evaluates both Sukuna and Gojo mudras every frame—your finger gestures automatically switch and activate the corresponding domain with zero manual mode-switching.
-- **Decoupled Asynchronous Pipeline**: Multi-threaded architecture isolating camera capture, worker inference, and SIMD graphics rendering to deliver consistent **30–60+ FPS** with sub-millisecond query latency.
-- **Depth-Layered Neural Compositing**: Separates the user from the physical background using neural selfie segmentation, inserting high-resolution domain environments (e.g. *Malevolent Shrine*, *Infinite Void*) **behind** the user while wrapping cursed auras, perspective-anchored skeletal energy, and shockwaves in front.
-- **Acoustic Synchronization**: Procedural, royalty-free audio cues locked to the official anime activation timeline (0.00s charging → 1.20s voice resonance → 1.35s blinding flash → 1.50s spatial expansion).
-- **Hybrid Web & Native Runtime**: Run locally with a physical webcam or stream over HTTP/WebRTC from a remote headless GPU/CPU server with Picture-in-Picture local camera feedback.
+- **Invariant Multi-Class Mudra Recognition**: Palm-scale invariant coordinate frames, 3D finger curl ratios, and spatial crossing metrics evaluate gestures independent of camera distance.
+- **Strict Hand-Count Enforcement**:
+  - **Malevolent Shrine (Sukuna)**: Strictly requires **2 hands** clasped with upright thumbs and touching index fingertips.
+  - **Infinite Void (Gojo)**: Strictly requires **1 hand** raised to head level with middle finger crossed over index finger.
+  - **Neutral State**: Insufficient or non-matching hand positions evaluate to **UNKNOWN**—Gojo is never used as an ambiguous fallback.
+- **Decoupled High-FPS Architecture**: Asynchronous vision tracking isolates MediaPipe inference from graphics rendering, preventing dropped frames or pipeline stalls.
+- **SIMD Integer Compositing**: Optimized color grading, 2.5D parallax layer rendering, and downscaled optical flow reduce frame rendering time by over 57%.
+- **Canonical Timeline & Audio Engine**: Event triggers synchronized to the official Crunchyroll audio progression (0.00s mudra hold → 0.70s tremor → 1.20s chant resonance → 1.35s blinding flash → 1.50s domain barrier).
+- **Interactive Calibration & HUD**: Real-time 21-landmark skeleton visualizer, HUD confidence bars, and on-screen gesture calibration overlay.
+- **Dual-Mode Web Server**: Seamless HTTP browser stream with local webcam capture and animated character demonstration feed.
 
 ---
 
 ## ⛩️ Canonical Mudra Recognition
 
-Domain activation strictly requires the performer to form and hold the physical mudra with anatomical accuracy:
+Mudra evaluation uses hand-scale invariant geometric metrics rather than raw screen coordinates:
 
-| Domain | Character | Mudra / Seal | Visual Signature & Gesture Mechanics |
+| Domain | Character | Mudra / Seal | Strict Anatomical Constraints |
 |---|---|---|---|
-| **Malevolent Shrine**<br>`伏魔御廚子` | **Ryomen Sukuna** *(Default)* | **Enma-ten Mudra**<br>*(閻魔天印 / Yama)* | • **Hands**: Two-handed clasped mudra at chest level.<br>• **Thumbs**: Extended upright and parallel.<br>• **Index Fingers**: Tips pressed firmly together.<br>• **Lower Fingers**: Middle, ring, and pinky curled tightly inward.<br>• **Visuals**: Demonic bone pagoda, crimson moon, demonic mist, and razor-sharp cursed lightning. |
-| **Infinite Void**<br>`無量空処` | **Satoru Gojo** | **Taishakuten Mudra**<br>*(帝釈天印 / Indra)* | • **Hands**: Single hand raised to eye/face level.<br>• **Index & Middle**: Middle finger tightly crossed over index finger.<br>• **Ring & Pinky**: Folded into palm, pinned securely by thumb.<br>• **Visuals**: Cosmic singularity, radiant violet aura, astrolabe rings, and celestial gravitational pull. |
+| **Malevolent Shrine**<br>`伏魔御廚子` | **Ryomen Sukuna** | **Enma-ten Mudra**<br>*(閻魔天印 / Yama)* | • **Hands Detected**: **Strictly 2 hands** ($N = 2$). Single hand scores $0\%$.<br>• **Palm Proximity**: Inter-wrist distance $< 1.15 \times$ palm scale.<br>• **Thumbs**: Upright alignment ($u_{long} \cdot [0, -1] > 0.45$).<br>• **Index Fingers**: Fingertip distance $< 0.50 \times$ palm scale.<br>• **Lower Fingers**: Middle, ring, and pinky curled inward ($> 0.60$ curl ratio). |
+| **Infinite Void**<br>`無量空処` | **Satoru Gojo** | **Taishakuten Mudra**<br>*(帝釈天印 / Indra)* | • **Hands Detected**: **Exactly 1 hand** ($N = 1$). 2 hands score $0\%$.<br>• **Spatial Height**: Hand raised to head/eye level ($y_{wrist} < 0.62$).<br>• **Finger Crossing**: Middle finger crossed over index finger ($\text{cross\_ratio} < 0.40$).<br>• **Extended Fingers**: Index and middle fully extended ($< 0.40$ curl ratio).<br>• **Folded Fingers**: Ring and pinky tucked into palm ($> 0.65$ curl ratio). |
 
 ```
-                 [ 21-JOINT 3D ANGLE CALCULATION ]
-       Finger State = cos(θ) = (v_ba · v_bc) / (||v_ba|| ||v_bc||)
-                                 │
-            ┌────────────────────┴────────────────────┐
-            ▼                                         ▼
-   [ Sukuna: Enma-ten ]                      [ Gojo: Taishakuten ]
-  - Two-hand clasp detected                 - Single dominant hand
-  - Upright thumbs angle < 30°              - Crossed middle & index
-  - Index tips distance < 0.08              - Curled ring & pinky
-  - Ring/pinky flexion > 140°               - Thumb pin constraint
-            │                                         │
-            └────────────────────┬────────────────────┘
-                                 ▼
-                     [ Dynamic Theme Switch ]
-           Hold Meter: 12 Consecutive Frames Required
-                                 │
-                                 ▼
-              >> 領域展開 : DOMAIN EXPANSION TRIGGERED <<
+                       [ INPUT HAND LANDMARKS ]
+                                  │
+                  ┌───────────────┴───────────────┐
+                  ▼                               ▼
+          [ Hand Count = 2 ]              [ Hand Count = 1 ]
+                  │                               │
+         Sukuna Evaluator                  Gojo Evaluator
+        - Wrist separation                - Wrist height (< 0.62)
+        - Upright thumbs                  - Index/middle extension
+        - Index tip proximity             - 3D Crossing metric (< 0.40)
+        - Ring/pinky curl (> 0.60)        - Ring/pinky tuck (> 0.65)
+                  │                               │
+                  ▼                               ▼
+         Sukuna Score: 0–100%             Gojo Score: 0–100%
+                  │                               │
+                  └───────────────┬───────────────┘
+                                  ▼
+                     [ Multi-Class State Machine ]
+                  Neither ≥ 78% ──► State: UNKNOWN
+                  Sukuna ≥ 78%  ──► State: SUKUNA_CONFIRMED
+                  Gojo   ≥ 78%  ──► State: GOJO_CONFIRMED
+                                  │
+                                  ▼
+                  Hold Accumulator (12 Frames @ 30 FPS)
+                                  │
+                                  ▼
+                     >> 領域展開 : DOMAIN EXPANSION <<
 ```
-
----
-
-## 🏗️ System Architecture
-
-DomainVision separates heavy neural inference from the display presentation loop to ensure an uninterrupted, butter-smooth user experience:
-
-```
- CAMERA / WEBCAM (1280x720 @ 30/60 FPS)
-        │
-        ├───► [ DISPLAY RENDER LOOP ] ──────────────────────────────────────────┐
-        │     • Zero-latency raw feed display                                   │
-        │     • SIMD bitwise alpha compositing (< 1 ms)                         │
-        │     • Multi-halo particle physics engine                              │
-        │     • High-contrast non-overshadowed telemetry HUD                    │
-        │                                                                       ▼
-        └───► [ ASYNC WORKER THREAD ] (Frame-dropping queue)               [ OUTPUT ]
-              • 640x360 downscaled tracking buffer                    Native Window /
-              • MediaPipe 21-Landmark Hand Detector                   Browser Stream
-              • Neural Selfie Segmentation Mask (Interpolated)
-              • Vector Joint-Angle Analysis & Mudra Classifier
-```
-
-### Timeline & State Progression
-
-The sequence replicates the canonical Crunchyroll Sukuna activation timeline:
-
-```
- 0.00s          0.05s               0.70s              1.20s         1.35s      1.40s      1.50s
-───┼──────────────┼───────────────────┼──────────────────┼─────────────┼──────────┼──────────┼────►
- Sign       Charge SFX          Energy Tremor       Voice Line     Blinding   Barrier    Domain
- Matched    Particles Suck In   Screen Shake Ramps  Resonance      Flash      Shockwave  Active
-```
-
----
-
-## 📊 Visual Showcase
-
-| Phase 1: Idle & Dual Mudra Search | Phase 2: Sign Matched & Charging |
-|:---:|:---:|
-| ![Idle Normal](screenshot_01_normal.png) | ![Charging Mudra](screenshot_03_charging_curse.png) |
-| *Real-time dual-recognition meter and clean telemetry HUD* | *Particles sucked into chest, aura ignition, and hold progress* |
-
-| Phase 3: Spatial Shockwave & Flash | Phase 4: Full Domain Active |
-|:---:|:---:|
-| ![Flash Transition](screenshot_04_domain_flash_shockwave.png) | ![Malevolent Shrine](screenshot_05_malevolent_shrine_active.png) |
-| *Optical distortion refraction and chromatic cursed energy* | *Malevolent Shrine backdrop, red water mist, and calligraphy banner* |
 
 ---
 
 ## ⚡ Performance Benchmarks
 
-All benchmarks measured on standard 1280×720 (720p HD) resolution running on commodity CPU hardware:
+Empirically measured across 60-frame benchmark runs on commodity Linux CPU (MediaPipe 1.0.1 with XNNPACK, OpenCV 5.0):
 
-| Pipeline Stage | Legacy Synchronous | DomainVision 2.0 (Optimized) | Speedup |
-|---|---|---|:---:|
-| **MediaPipe Tracking Query** | 49.0 ms *(stalled loop)* | **0.01 ms** *(async worker)* | **4900×** |
-| **Cursed Aura Compositing** | 103.0 ms *(float32 multiply)* | **0.80 ms** *(SIMD bitwise & downscale)* | **128×** |
-| **Calligraphy Banner Render** | 142.0 ms *(Pillow loop)* | **0.10 ms** *(pre-rendered cache)* | **1420×** |
-| **Screen Tremor & Distortion** | 34.6 ms *(full remap)* | **7.30 ms** *(warpAffine fast-path)* | **4.7×** |
-| **Environmental Water Mist** | 10.0 ms *(Python Y-loop)* | **2.60 ms** *(vectorized NumPy array)* | **3.8×** |
-| **Particle Physics & Core** | 8.2 ms *(heap churn)* | **1.20 ms** *(pre-allocated buffer)* | **6.8×** |
-| **Sustained Normal FPS** | ~12 FPS | **219.4 FPS** | **18×** |
-| **Browser HTTP Stream FPS** | ~8 FPS | **33.4 – 38.7 FPS** | **4.5×** |
+### Full 1280×720 (720p HD) Resolution
+
+| Pipeline Stage | Before Optimization | After Optimization | Speedup |
+| :--- | :--- | :--- | :--- |
+| **Color Grading** | 26.19 ms *(float32 multiply)* | **3.36 ms** *(SIMD uint8 & downscaled bloom)* | **7.8x** |
+| **2.5D Parallax Background** | 17.19 ms *(3x warpAffine)* | **3.74 ms** *(slice shift & downscaled rays)* | **4.6x** |
+| **Camera Motion (Farneback Flow)** | 4.13 ms *(dense flow)* | **0.50 ms** *(decimated 160x90 flow)* | **8.3x** |
+| **Segmentation Mask Cleanup** | 3.50 ms *(full-res morphology)* | **0.05 ms** *(320x180 downscaled morphology)* | **70x** |
+| **Gesture Classifier** | ~0.15 ms *(ad-hoc heuristics)* | **0.02 ms** *(vectorized invariant geometry)* | **7.5x** |
+| **Synchronous Total Frame** | **65.82 ms** (15.2 FPS) | **27.91 ms** (**35.8 FPS**) | **2.36x** |
+| **Decoupled Render Loop** | ~7–8 FPS *(blocking I/O)* | **50–60+ FPS** *(thread decoupled)* | **~7x** |
+
+*For complete benchmark distributions, P50/P95/P99 latencies, and 640x360 web stream statistics, see [PERFORMANCE_BASELINE.md](PERFORMANCE_BASELINE.md).*
+
+---
+
+## 🏗️ System Architecture
+
+```
+  CAMERA FEED (Webcam or Synthetic Demo)
+        │
+        ├───► [ RENDER THREAD ] (50–60+ FPS Display Loop)
+        │     • Frame display & window event polling
+        │     • 2.5D Parallax domain layers (Malevolent Shrine / Infinite Void)
+        │     • 3-Layer edge-aware cursed aura compositing
+        │     • Cursed particle physics & screen tremor
+        │     • Real-time HUD, skeleton overlay, and calibration telemetry
+        │
+        └───► [ VISION TRACKER THREAD ] (Decoupled Background Inference)
+              • Downscaled tracking buffer (320x180 / 640x360)
+              • MediaPipe 21-landmark hand detector (Hands 1 & 2)
+              • Neural selfie segmentation mask
+              • Invariant geometric mudra feature extractor
+              • Multi-class temporal state machine
+```
 
 ---
 
 ## 🚀 Quickstart
 
-### 1. Prerequisites
+### 1. Installation
 
-Ensure you have Python 3.10+ and standard build tools installed:
 ```bash
 # Clone the repository
 git clone https://github.com/gnshx/DomainVision.git
-cd domaincv
+cd DomainVision
 
-# Create and activate a virtual environment
-python3 -m venv venv
-source venv/bin/activate
+# Create and activate Python virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Native Desktop Application (Local Webcam)
-To launch with direct window display and your local camera:
+### 2. Run Native Desktop Application
+
 ```bash
+# Launch with default camera
 python main.py
-```
-*Tip: If you have multiple cameras, select your device with `--camera 1` or `--camera 2`.*
 
-### 3. Automated Demonstration & Video Recording
-Run in synthetic demonstration mode without requiring a physical camera:
-```bash
-# Preview animated character demo
+# Launch with calibration overlay active
+python main.py --calibrate
+
+# Launch with camera preview mirrored (selfie mode)
+python main.py --flip
+
+# Launch animated synthetic demo mode (no webcam needed)
 python main.py --demo
+```
 
-# Record a 180-frame (6-second) 30 FPS demo clip directly to MP4
-python main.py --demo --theme malevolent_shrine --frames 180 --record final_demo.mp4
+### 3. Record Video Demonstration
+
+```bash
+# Record 180 frames (6 seconds) of Malevolent Shrine demo
+python main.py --demo --theme malevolent_shrine --frames 180 --headless --record shrine_demo.mp4
+
+# Record 180 frames of Infinite Void demo
+python main.py --demo --theme infinite_void --frames 180 --headless --record void_demo.mp4
 ```
 
 ---
 
 ## 🌐 Web Application & Remote SSH
 
-DomainVision includes a built-in multi-threaded HTTP/WebRTC web server. This enables full AR filtering over SSH on remote headless servers (cloud instances, VPS, home servers) without needing `/dev/video0` on the remote host:
+DomainVision provides an integrated HTTP streamer designed for remote development, cloud instances, and SSH sessions:
 
 ```bash
 python web_app.py --port 8080
 ```
 
-1. Open **`http://localhost:8080/`** in your browser.
-2. Grant camera permissions: the browser captures your laptop/desktop camera and streams frames to the server.
-3. Select between:
-   - **📷 My Local Webcam**: Full AR filter applied directly to your camera feed.
-   - **🤖 Animated Demo Feed**: View the anime character demonstration while your live webcam is displayed in the bottom-right Picture-in-Picture (PiP) window. Your physical hand gestures drive the animated character's domain expansion!
+1. Navigate to **`http://localhost:8080/`** in your browser.
+2. Select your viewing mode:
+   - **📷 My Local Webcam**: Captures your local webcam and streams frames with real-time AR effects.
+   - **🤖 Animated Demo Feed**: Runs the animated character feed with your live webcam in a bottom-right Picture-in-Picture window.
+3. Interactive UI buttons allow direct toggling of:
+   - Domain Expansion (`⚡ Force Expand`) and Collapse (`🔄 Collapse / Reset`)
+   - Theme switching (`🩸 Sukuna` / `🌌 Gojo`)
+   - 21-landmark skeleton visualizer (`🦴 Skeleton`)
+   - Real-time gesture calibration overlay (`📐 Calibration`)
+   - High-resolution frame snapshot download (`📸 Snapshot`)
+
+---
+
+## 📐 Calibration & Debugging
+
+DomainVision includes dedicated diagnostic and calibration tools:
+
+### Live In-App Calibration Overlay
+Press **`C`** during runtime (or pass `--calibrate`) to render real-time geometric parameters directly onto the screen:
+- **Hands Count**: Confirms whether 1 or 2 hands are recognized.
+- **Wrist Proximity**: Displays inter-wrist distance relative to palm scale.
+- **Thumb Angle**: Measures upright orientation relative to palm coordinate frame.
+- **Index Distance**: Verifies index fingertip contact.
+- **Lower Curl**: Displays curl ratio of lower fingers ($> 0.60$ threshold).
+- **Index-Middle Cross**: Displays 3D spatial crossing metric ($< 0.40$ threshold).
+- **Wrist Height**: Shows hand vertical elevation ($< 0.62$ threshold).
+
+### 21-Landmark Skeleton Overlay
+Press **`L`** during runtime to render color-coded 21-joint skeletal landmarks and bone connections (wrist, thumb, index, middle, ring, pinky).
+
+### Dataset Sample Logger
+Collect verified calibration samples for analysis or dataset creation:
+```bash
+python main.py --log-gestures
+```
+Logs structured JSONL entries to `logs/gesture_samples.jsonl` with timestamps, joint angles, curl ratios, and confidence scores.
+
+### Automated Unit Tests
+Validate gesture classifier rules and transitions against synthetic landmark test cases:
+```bash
+python -m unittest tests/test_gestures.py
+```
+
+### Profiler Benchmark Tool
+Run high-precision stage latency profiling on your machine:
+```bash
+# Profile 1280x720 pipeline over 60 frames
+python utils/profiler_benchmark.py --frames 60 --width 1280 --height 720
+
+# Profile 640x360 web resolution over 60 frames
+python utils/profiler_benchmark.py --frames 60 --width 640 --height 360
+```
 
 ---
 
 ## 🎮 Interactive Controls
 
-| Hotkey | Action | Functionality |
+| Key | Action | Description |
 | :---: | :--- | :--- |
-| **`Space` / `D`** | **Force Expand** | Immediately trigger the Domain Expansion sequence without waiting for hand sign hold. |
-| **`R`** | **Collapse / Reset** | Initiate the 0.9s barrier dissolve transition back to normal reality. |
-| **`1`** | **Malevolent Shrine** | Force-switch active domain theme to Ryomen Sukuna's Malevolent Shrine. |
-| **`2`** | **Infinite Void** | Force-switch active domain theme to Satoru Gojo's Infinite Void. |
-| **`H`** | **Toggle HUD** | Show/hide the non-overshadowed telemetry cards and mudra confidence gauges. |
-| **`S`** | **Screenshot** | Save a pristine high-resolution snapshot to disk (`domain_screenshot_<timestamp>.png`). |
-| **`Q` / `Esc`** | **Quit** | Gracefully stop worker threads and exit the application. |
+| **`C`** | **Calibration Overlay** | Toggle live on-screen geometric parameter diagnostics. |
+| **`L`** | **Skeleton Overlay** | Toggle 21-landmark joint positions and bone connections. |
+| **`M`** | **Mirror Webcam** | Toggle horizontal webcam feed flipping (selfie mode). |
+| **`1`** | **Malevolent Shrine** | Force-switch target theme to Ryomen Sukuna. |
+| **`2`** | **Infinite Void** | Force-switch target theme to Satoru Gojo. |
+| **`Space` / `D`** | **Force Expand** | Manually trigger Domain Expansion animation sequence. |
+| **`R`** | **Collapse / Reset** | Dissolve domain barrier and reset state to normal reality. |
+| **`H`** | **Toggle HUD** | Show or hide floating telemetry HUD. |
+| **`S`** | **Save Screenshot** | Save high-resolution PNG snapshot to disk. |
+| **`Q` / `Esc`** | **Quit** | Cleanly terminate background threads and close application. |
 
 ---
 
 ## 📁 Repository Structure
 
 ```
-domaincv/
-├── main.py                     # Main application orchestrator, state machine, and HUD
-├── config.py                   # Canonical timelines, color themes, and joint angle thresholds
-├── web_app.py                  # Multi-threaded HTTP server with WebRTC/PiP support
-├── requirements.txt            # Project dependencies
+DomainVision/
+├── main.py                     # Main application, state machine, and HUD
+├── config.py                   # Canonical timelines, color themes, and thresholds
+├── web_app.py                  # HTTP streamer with WebRTC/PiP and telemetry headers
+├── requirements.txt            # Python dependencies
+├── PERFORMANCE_BASELINE.md     # Measured stage benchmarks and latency analysis
 │
 ├── tracking/
-│   ├── detector.py             # Unified MediaPipe async tracker (Segmentation, Hands, Pose)
-│   ├── hand_tracker.py         # 21-joint 3D kinematic angle analyzer & bone connectivity
-│   └── gesture_recognizer.py   # Dual-mudra recognition engine (Enma-ten & Taishakuten)
+│   ├── detector.py             # Asynchronous MediaPipe tracker (hands + segmentation)
+│   ├── hand_tracker.py         # Invariant palm coordinate frames & 3D kinematic metrics
+│   └── gesture_recognizer.py   # Multi-class state machine (Sukuna / Gojo / Unknown)
 │
 ├── effects/
-│   ├── domain_environment.py   # Vectorized Malevolent Shrine & Infinite Void environments
-│   ├── aura.py                 # SIMD bitwise cursed aura & boundary morphology glow
+│   ├── domain_layers.py        # 2.5D parallax background rendering (Shrine / Void)
+│   ├── aura.py                 # Edge-aware 3-layer cursed aura compositing
 │   ├── cursed_energy.py        # Perspective-anchored joint filaments & fingertip lightning
-│   ├── particles.py            # Physics particle system (floating motes, vortex suction, burst)
+│   ├── particles.py            # Physics particle system (floating motes, vortex suction)
 │   ├── flash.py                # Blinding cursed energy screen flash transition
 │   ├── shockwave.py            # Expanding refractive barrier shockwave rings
-│   └── distortion.py           # WarpAffine camera shake and half-res optical displacement
+│   ├── distortion.py           # Optical screen shake and chromatic displacement
+│   └── color_grade.py          # SIMD bloom, vignette, and film grain
 │
 ├── utils/
-│   ├── fps.py                  # High-precision PerformanceProfiler (FPS, Track ms, Render ms)
-│   ├── text_renderer.py        # Cached Japanese calligraphy typography renderer
+│   ├── profiler_benchmark.py   # Multi-stage latency benchmark tool
+│   ├── motion_estimator.py     # Decimated optical flow camera motion tracker
+│   ├── quality_controller.py   # Dynamic performance scaler & load balancer
 │   ├── demo_feed.py            # State-aware animated character demonstration camera
-│   ├── smoothing.py            # Velocity-adaptive Exponential Moving Average (EMA)
-│   └── blending.py             # SIMD bitwise compositing utilities
+│   └── fps.py                  # Performance profiler with smoothed metrics
 │
 ├── audio/
-│   └── audio_manager.py        # Canonical audio timeline engine (aplay, pw-play, sounddevice)
+│   └── audio_manager.py        # Queued non-blocking audio engine (aplay, pw-play)
+│
+├── tests/
+│   └── test_gestures.py        # Unit test suite for multi-class mudra classification
 │
 └── assets/
-    ├── shrine.png              # Malevolent Shrine panoramic backdrop
-    ├── void.png                # Infinite Void celestial singularity backdrop
-    ├── models/                 # MediaPipe task models (selfie_segmenter, hand_landmarker)
-    └── sounds/                 # Procedurally generated royalty-free 16-bit PCM audio
-```
-
----
-
-## ⚙️ Configuration & Tuning
-
-Key parameters in [config.py](file:///home/dlcv/domaincv/config.py) can be tailored to your hardware and camera setup:
-
-```python
-# Video Resolution
-VIDEO_CONFIG = {
-    "width": 1280,              # Capture & render width (16:9 HD)
-    "height": 720,              # Capture & render height
-    "target_fps": 30,           # Target processing frame rate
-}
-
-# Mudra Recognition Sensitivity
-GESTURE_CONFIG = {
-    "hold_duration_frames": 12, # Frames required to confirm mudra trigger (~0.4s @ 30 FPS)
-    "match_threshold": 0.72,    # Percentage confidence required to accumulate hold
-    "smoothing_alpha": 0.40,    # Landmark smoothing EMA factor (0 = rigid, 1 = raw)
-}
+    ├── shrine.png              # Malevolent Shrine backdrop
+    ├── void.png                # Infinite Void cosmic singularity backdrop
+    ├── models/                 # MediaPipe task models (segmenter, hand_landmarker)
+    └── sounds/                 # Canonical 16-bit PCM procedural audio cues
 ```
 
 ---
@@ -260,9 +293,3 @@ GESTURE_CONFIG = {
 ## 📜 License
 
 This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
-
----
-
-<div align="center">
-  <sub>Developed with ❤️ for computer vision and Jujutsu Kaisen enthusiasts. 領域展開!</sub>
-</div>
