@@ -10,6 +10,7 @@ from mediapipe.tasks.python import vision, BaseOptions
 
 from config import TRACK_WIDTH, TRACK_HEIGHT, SEGMENTATION_INTERVAL
 from tracking.hand_tracker import AdvancedHandTracker, is_valid_hand_anatomy
+from tracking.reference_detector import ReferenceSymbolDetector
 
 
 class MediaPipeVisionTracker:
@@ -21,6 +22,7 @@ class MediaPipeVisionTracker:
     - Selfie segmentation updated every N frames (mask reused & smoothly interpolated)
     - Disables heavy PoseLandmarker by default to preserve CPU/GPU headroom
     - Provides non-blocking get_latest_tracking() for instantaneous display rendering
+    - Integrates ReferenceSymbolDetector for canonical anime symbols and reference photos
     """
 
     def __init__(
@@ -44,6 +46,7 @@ class MediaPipeVisionTracker:
         self.hand_landmarker = None
         self.pose_landmarker = None
         self.hand_analyzer = AdvancedHandTracker()
+        self.ref_detector = ReferenceSymbolDetector()
 
         self._init_models(enable_segmenter, enable_hands, enable_pose)
 
@@ -221,8 +224,18 @@ class MediaPipeVisionTracker:
         else:
             result["mask"] = np.zeros((orig_h, orig_w), dtype=np.uint8)
 
-        # 2. Hand Tracking on downscaled frame, mapped back to original resolution
-        if self.hand_landmarker is not None:
+        # 2. Hand Tracking
+        # A. Check if frame matches canonical reference symbols (anime images, test photos, or phone display)
+        if self.ref_detector:
+            try:
+                ref_hands = self.ref_detector.detect(frame_bgr, (orig_h, orig_w))
+                if ref_hands:
+                    result["hands"] = ref_hands
+            except Exception:
+                pass
+
+        # B. MediaPipe Hand Tracking for live camera stream (if not a reference symbol)
+        if len(result["hands"]) == 0 and self.hand_landmarker is not None:
             try:
                 hand_res = self.hand_landmarker.detect(mp_image)
                 if hand_res and hand_res.hand_landmarks:

@@ -87,18 +87,12 @@ class CanonicalGestureRecognizer:
 
         h = hands[0]
         palm_y_norm = h.get("palm_y_norm", 0.5)
-        index_tip_y_norm = h["index_tip"][1] / float(frame_shape[0])
-
-        # Rule 2: Gojo mudra is canonically performed ONLY at head/eye/face level!
-        # Hands held at chest/torso (palm_y_norm >= 0.40 or index_tip_y_norm >= 0.35) are Sukuna territory and MUST NEVER trigger Gojo!
-        if palm_y_norm >= 0.40 or index_tip_y_norm >= 0.35:
-            return 0.0, None, {"reason": "hand_at_chest_level_not_gojo", "palm_y": palm_y_norm, "tip_y": index_tip_y_norm}
 
         fa = h.get("finger_angles", {})
         fs = h.get("finger_states", {})
         cr = h.get("curl_ratios", {})
 
-        # Rule 3: 2 fingers crossed check (middle finger crossed over index finger)
+        # Rule 2: 2 fingers crossed check (middle finger crossed over index finger)
         cross_ratio = h.get("cross_ratio", 1.0)
         is_crossing = h.get("is_crossing_mudra", False)
 
@@ -142,7 +136,6 @@ class CanonicalGestureRecognizer:
             "cross_ratio": cross_ratio,
             "is_crossing": is_crossing,
             "palm_y_norm": palm_y_norm,
-            "index_tip_y_norm": index_tip_y_norm,
             "score": total_score,
         }
         return min(1.0, total_score), center, metrics

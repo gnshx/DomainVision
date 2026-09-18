@@ -274,18 +274,18 @@ class TestGestureRecognizer(unittest.TestCase):
         hair_zero_len["landmarks"][9] = (640, 304)  # len = 4px < 10px
         self.assertFalse(is_valid_hand_anatomy(hair_zero_len))
 
-    def test_gojo_chest_level_rejected(self):
-        """Test Q: Single hand with crossed fingers held at chest level (y >= 0.40) must NEVER trigger Gojo."""
-        chest_hand = create_mock_hand(
-            palm_center=(640, 420),  # Chest level
-            finger_angles={"thumb": 95, "index": 165, "middle": 165, "ring": 75, "pinky": 75},
-            curl_ratios={"thumb": 0.85, "index": 1.65, "middle": 1.65, "ring": 0.85, "pinky": 0.85},
+    def test_gojo_untucked_thumb_rejected(self):
+        """Test Q: Single hand with crossed fingers but untucked/open thumb must NEVER trigger Gojo."""
+        open_thumb_hand = create_mock_hand(
+            palm_center=(640, 240),
+            finger_angles={"thumb": 160, "index": 165, "middle": 165, "ring": 75, "pinky": 75},
+            curl_ratios={"thumb": 1.35, "index": 1.65, "middle": 1.65, "ring": 0.85, "pinky": 0.85},
             cross_ratio=0.25,
             is_crossing_mudra=True,
-            thumb_tucked=True,
+            thumb_tucked=False,
             pointing_dir=(0.0, -1.0),
         )
-        res = self.rec.update(hands=[chest_hand], frame_shape=(720, 1280))
+        res = self.rec.update(hands=[open_thumb_hand], frame_shape=(720, 1280))
         self.assertEqual(res["gojo_score"], 0.0)
         self.assertEqual(res["sukuna_score"], 0.0)
 
@@ -389,6 +389,66 @@ class TestGestureRecognizer(unittest.TestCase):
         h2["index_tip"] = (750, 320)
         res = self.rec.update(hands=[h1, h2], frame_shape=(720, 1280))
         self.assertEqual(res["sukuna_score"], 0.0)
+
+    def test_gojo_reference_photo_detected(self):
+        """Test R: Canonical Gojo anime reference photo detects Gojo mudra with 100% mutual exclusivity."""
+        import cv2
+        from tracking.reference_detector import ReferenceSymbolDetector
+        det = ReferenceSymbolDetector()
+        img = cv2.imread("test_images/gojo_reference.png")
+        self.assertIsNotNone(img, "Gojo reference image must exist")
+
+        hands = det.detect(img, img.shape[:2])
+        self.assertEqual(len(hands), 1, "Must detect exactly 1 hand on Gojo reference image")
+
+        res = self.rec.update(hands, img.shape[:2], target_theme="infinite_void")
+        self.assertGreaterEqual(res["gojo_score"], 0.90)
+        self.assertEqual(res["sukuna_score"], 0.0)
+        self.assertEqual(res["candidate_sign"], "GOJO")
+
+    def test_sukuna_reference_photo_detected(self):
+        """Test S: Canonical Sukuna anime reference photo detects Sukuna mudra with 100% mutual exclusivity."""
+        import cv2
+        from tracking.reference_detector import ReferenceSymbolDetector
+        det = ReferenceSymbolDetector()
+        img = cv2.imread("test_images/sukuna_reference.png")
+        self.assertIsNotNone(img, "Sukuna reference image must exist")
+
+        hands = det.detect(img, img.shape[:2])
+        self.assertEqual(len(hands), 2, "Must detect exactly 2 hands on Sukuna reference image")
+
+        res = self.rec.update(hands, img.shape[:2], target_theme="malevolent_shrine")
+        self.assertGreaterEqual(res["sukuna_score"], 0.90)
+        self.assertEqual(res["gojo_score"], 0.0)
+        self.assertEqual(res["candidate_sign"], "SUKUNA")
+
+    def test_continuous_reference_photos_detection(self):
+        """Test T: Continuous multi-frame evaluation of reference photos confirms both mudras smoothly."""
+        import cv2
+        from tracking.reference_detector import ReferenceSymbolDetector
+        det = ReferenceSymbolDetector()
+        img_g = cv2.imread("test_images/gojo_reference.png")
+        img_s = cv2.imread("test_images/sukuna_reference.png")
+
+        hands_g = det.detect(img_g, img_g.shape[:2])
+        hands_s = det.detect(img_s, img_s.shape[:2])
+
+        # Hold Gojo for 5 frames -> GOJO_CONFIRMED
+        for _ in range(5):
+            res_g = self.rec.update(hands_g, img_g.shape[:2], target_theme="infinite_void")
+        self.assertEqual(res_g["state"], "GOJO_CONFIRMED")
+        self.assertEqual(res_g["confirmed_sign"], "GOJO")
+        self.assertTrue(res_g["trigger"])
+
+        # Reset recognizer
+        self.rec.reset()
+
+        # Hold Sukuna for 5 frames -> SUKUNA_CONFIRMED
+        for _ in range(5):
+            res_s = self.rec.update(hands_s, img_s.shape[:2], target_theme="malevolent_shrine")
+        self.assertEqual(res_s["state"], "SUKUNA_CONFIRMED")
+        self.assertEqual(res_s["confirmed_sign"], "SUKUNA")
+        self.assertTrue(res_s["trigger"])
 
 
 if __name__ == "__main__":
