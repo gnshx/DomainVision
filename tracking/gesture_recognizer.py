@@ -86,7 +86,7 @@ class CanonicalGestureRecognizer:
             p1 = hands[0]["palm_center"]
             p2 = hands[1]["palm_center"]
             avg_scale = (hands[0].get("palm_scale", 30) + hands[1].get("palm_scale", 30)) / 2.0
-            if math.dist(p1, p2) < avg_scale * 2.6:
+            if math.dist(p1, p2) < avg_scale * 3.4:
                 return 0.0, None, {"suppressed": "dual_hands_clasped"}
 
         best_score = 0.0
@@ -170,6 +170,13 @@ class CanonicalGestureRecognizer:
                     + 0.10 * dir_score
                     + 0.06 * thumb_score
                 )
+
+                lm = h.get("landmarks", [])
+                thumb_mcp_y = lm[2][1] if len(lm) > 2 else h["wrist"][1]
+                thumb_up = (fa.get("thumb", 0) > 120) and (h["thumb_tip"][1] < thumb_mcp_y)
+                if thumb_up:
+                    # Sukuna signature: upright thumb must NOT trigger Gojo
+                    cand_score = max(0.0, cand_score - 0.40)
 
                 # Cap score if crossing is absent — Gojo CANNOT activate without finger crossing!
                 if cross_score < 0.4:

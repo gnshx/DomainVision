@@ -390,7 +390,7 @@ class DomainExpansionApp:
         # Automatic character theme switching based strictly on confirmed/high-confidence mudra!
         detected_theme = gesture_info.get("detected_theme")
         if detected_theme and self.state == "NORMAL":
-            if detected_theme != self.theme_name and (gesture_info.get("sign_detected") or gesture_info.get("match_pct", 0) >= 72):
+            if detected_theme != self.theme_name and (gesture_info.get("sign_detected") or gesture_info.get("match_pct", 0) >= 70):
                 self.set_theme(detected_theme)
 
         if gesture_info.get("energy_center"):

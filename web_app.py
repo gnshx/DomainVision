@@ -833,13 +833,26 @@ def main():
     args = parser.parse_args()
 
     SERVER_INSTANCE = CursedARWebServer(port=args.port, width=args.width, height=args.height)
-    server_address = ("0.0.0.0", args.port)
-    ThreadingHTTPServer.allow_reuse_address = True
-    httpd = ThreadingHTTPServer(server_address, ARStreamHandler)
+    port = args.port
+    max_retries = 10
+    httpd = None
+    for attempt in range(max_retries):
+        try:
+            server_address = ("0.0.0.0", port)
+            ThreadingHTTPServer.allow_reuse_address = True
+            httpd = ThreadingHTTPServer(server_address, ARStreamHandler)
+            SERVER_INSTANCE.port = port
+            break
+        except OSError as e:
+            if e.errno == 98 and attempt < max_retries - 1:
+                print(f"[Port {port} in use, trying port {port + 1}...]")
+                port += 1
+            else:
+                raise
 
     print("\n=======================================================")
     print(f"  DOMAINVISION AR WEB SERVER STARTED!")
-    print(f"  URL: http://localhost:{args.port}/")
+    print(f"  URL: http://localhost:{port}/")
     print("  - Auto Domain Switching by Finger Sign (Sukuna / Gojo)")
     print("  - Picture-in-Picture live webcam at bottom during demo feed")
     print("  - Press Ctrl+C in terminal to stop.")
