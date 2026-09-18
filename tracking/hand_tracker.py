@@ -58,7 +58,7 @@ def is_valid_hand_anatomy(hand_dict: Dict[str, Any]) -> bool:
         return False
 
     palm_scale = hand_dict.get("palm_scale", 0.0)
-    if palm_scale < 20.0:
+    if palm_scale < 15.0:
         return False
 
     bbox = hand_dict.get("bbox")
@@ -71,7 +71,7 @@ def is_valid_hand_anatomy(hand_dict: Dict[str, Any]) -> bool:
 
     bw = bbox[2] - bbox[0]
     bh = bbox[3] - bbox[1]
-    if bw < 25 or bh < 25:
+    if bw < 18 or bh < 18:
         return False
 
     # Check palm breadth (dist between Index MCP 5 and Pinky MCP 17)
@@ -82,17 +82,12 @@ def is_valid_hand_anatomy(hand_dict: Dict[str, Any]) -> bool:
 
     palm_breadth = math.dist(p5, p17)
     palm_len = math.dist(p0, p9)
-    if palm_len < 1e-4:
+    if palm_len < 10.0:
         return False
 
     ratio = palm_breadth / palm_len
-    # Human hands have breadth-to-length ratio between 0.22 and 1.60
-    # Hair/head texture false detections collapse into degenerate lines or tiny clumps
-    if ratio < 0.20 or ratio > 1.70:
-        return False
-
-    # Handedness confidence filter
-    if hand_dict.get("handedness_conf", 1.0) < 0.48:
+    # Human hands have breadth-to-length ratio between 0.08 and 2.80 (accommodates clasped hands seen edge-on)
+    if ratio < 0.08 or ratio > 2.80:
         return False
 
     return True

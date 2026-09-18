@@ -143,7 +143,7 @@ class TestGestureRecognizer(unittest.TestCase):
     def test_canonical_gojo_mudra(self):
         """Test C: Canonical Gojo mudra (crossed fingers, face height) triggers GOJO."""
         gojo_hand = create_mock_hand(
-            palm_center=(640, 260),  # Head/face level
+            palm_center=(640, 240),  # Head/face level
             finger_angles={"thumb": 95, "index": 165, "middle": 165, "ring": 75, "pinky": 75},
             curl_ratios={"thumb": 0.85, "index": 1.65, "middle": 1.65, "ring": 0.85, "pinky": 0.85},
             cross_ratio=0.25,  # Fingers tightly crossed
@@ -258,7 +258,7 @@ class TestGestureRecognizer(unittest.TestCase):
         valid_hand = create_mock_hand(palm_scale=38.0)
         self.assertTrue(is_valid_hand_anatomy(valid_hand))
 
-        # Tiny palm scale (< 20px) from hair texture noise
+        # Tiny palm scale (< 16px) from hair texture noise
         hair_tiny = create_mock_hand(palm_scale=12.0)
         self.assertFalse(is_valid_hand_anatomy(hair_tiny))
 
@@ -268,21 +268,38 @@ class TestGestureRecognizer(unittest.TestCase):
         hair_collapsed["landmarks"][17] = (641, 300)  # breadth = 1px, ratio ~ 0.03
         self.assertFalse(is_valid_hand_anatomy(hair_collapsed))
 
-        # Low handedness confidence
-        low_conf = create_mock_hand(palm_scale=35.0)
-        low_conf["handedness_conf"] = 0.32
-        self.assertFalse(is_valid_hand_anatomy(low_conf))
+        # Degenerate palm length (wrist to MCP collapsed on hair noise < 10px)
+        hair_zero_len = create_mock_hand(palm_scale=35.0)
+        hair_zero_len["landmarks"][0] = (640, 300)
+        hair_zero_len["landmarks"][9] = (640, 304)  # len = 4px < 10px
+        self.assertFalse(is_valid_hand_anatomy(hair_zero_len))
 
-    def test_strictly_two_classifications_mutual_exclusivity(self):
-        """Test L: Gojo and Sukuna are 100% mutually exclusive. Neither can score > 0 while other is active."""
-        # Gojo frame: exactly 1 hand crossed
-        gojo_hand = create_mock_hand(
-            palm_center=(640, 260),
+    def test_gojo_chest_level_rejected(self):
+        """Test Q: Single hand with crossed fingers held at chest level (y >= 0.40) must NEVER trigger Gojo."""
+        chest_hand = create_mock_hand(
+            palm_center=(640, 420),  # Chest level
             finger_angles={"thumb": 95, "index": 165, "middle": 165, "ring": 75, "pinky": 75},
             curl_ratios={"thumb": 0.85, "index": 1.65, "middle": 1.65, "ring": 0.85, "pinky": 0.85},
             cross_ratio=0.25,
             is_crossing_mudra=True,
             thumb_tucked=True,
+            pointing_dir=(0.0, -1.0),
+        )
+        res = self.rec.update(hands=[chest_hand], frame_shape=(720, 1280))
+        self.assertEqual(res["gojo_score"], 0.0)
+        self.assertEqual(res["sukuna_score"], 0.0)
+
+    def test_strictly_two_classifications_mutual_exclusivity(self):
+        """Test L: Gojo and Sukuna are 100% mutually exclusive. Neither can score > 0 while other is active."""
+        # Gojo frame: exactly 1 hand crossed
+        gojo_hand = create_mock_hand(
+            palm_center=(640, 240),
+            finger_angles={"thumb": 95, "index": 165, "middle": 165, "ring": 75, "pinky": 75},
+            curl_ratios={"thumb": 0.85, "index": 1.65, "middle": 1.65, "ring": 0.85, "pinky": 0.85},
+            cross_ratio=0.25,
+            is_crossing_mudra=True,
+            thumb_tucked=True,
+            pointing_dir=(0.0, -1.0),
         )
         res_g = self.rec.update(hands=[gojo_hand], frame_shape=(720, 1280))
         self.assertGreaterEqual(res_g["gojo_score"], 0.85)

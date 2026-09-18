@@ -121,6 +121,7 @@ class DomainExpansionApp:
         self.show_hud = True
         self.show_landmarks = True
         self.calibrate_mode = calibrate_mode
+        self.show_calibration = calibrate_mode
         self.log_gestures = log_gestures
         self.flip_webcam = flip_webcam
         self.log_file = "gesture_samples.jsonl" if log_gestures else None
@@ -387,10 +388,17 @@ class DomainExpansionApp:
             target_theme=self.theme_name,
         )
 
-        # Automatic character theme switching based strictly on confirmed/high-confidence mudra!
+        # Automatic character theme switching based strictly on stable confirmed/candidate mudra!
         detected_theme = gesture_info.get("detected_theme")
         if detected_theme and self.state == "NORMAL":
-            if detected_theme != self.theme_name and (gesture_info.get("sign_detected") or gesture_info.get("candidate_sign") in ["GOJO", "SUKUNA"] or gesture_info.get("match_pct", 0) >= 70):
+            if detected_theme != self.theme_name and (
+                gesture_info.get("sign_detected")
+                or (
+                    gesture_info.get("candidate_sign") in ["GOJO", "SUKUNA"]
+                    and gesture_info.get("stable_frames", 0) >= 2
+                    and gesture_info.get("match_pct", 0) >= 78
+                )
+            ):
                 self.set_theme(detected_theme)
 
         if gesture_info.get("energy_center"):

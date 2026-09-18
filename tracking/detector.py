@@ -86,9 +86,9 @@ class MediaPipeVisionTracker:
                 hand_opts = vision.HandLandmarkerOptions(
                     base_options=BaseOptions(model_asset_path=hand_path),
                     num_hands=2,
-                    min_hand_detection_confidence=0.55,
-                    min_hand_presence_confidence=0.52,
-                    min_tracking_confidence=0.50,
+                    min_hand_detection_confidence=0.28,
+                    min_hand_presence_confidence=0.25,
+                    min_tracking_confidence=0.25,
                 )
                 self.hand_landmarker = vision.HandLandmarker.create_from_options(hand_opts)
 
@@ -234,10 +234,6 @@ class MediaPipeVisionTracker:
                             h_label = handedness_list[idx][0].category_name
                             h_conf = float(handedness_list[idx][0].score)
 
-                        # Filter out false detections on hair, ears, or background noise
-                        if h_conf < 0.48:
-                            continue
-
                         analyzed = self.hand_analyzer.analyze_hand(
                             hand_lms,
                             (orig_h, orig_w),
@@ -245,7 +241,16 @@ class MediaPipeVisionTracker:
                             handedness=h_label,
                             handedness_conf=h_conf,
                         )
-                        # Require genuine anatomical hand proportions (strictly reject hair textures)
+                        # Reject false detections on hair:
+                        # 1. Reject tiny texture noise (< 16px)
+                        if analyzed.get("palm_scale", 0) < 16.0:
+                            continue
+
+                        # 2. Reject hair/head crown noise: top 16% of frame with small scale
+                        if analyzed.get("palm_y_norm", 0) < 0.16 and analyzed.get("palm_scale", 0) < 28.0:
+                            continue
+
+                        # 3. Anatomical proportion check
                         if not is_valid_hand_anatomy(analyzed):
                             continue
 

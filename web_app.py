@@ -42,7 +42,9 @@ class CursedARWebServer:
         elif action == "toggle_landmarks":
             self.app.show_landmarks = not self.app.show_landmarks
         elif action == "toggle_calibration":
-            self.app.show_calibration = not self.app.show_calibration
+            new_val = not getattr(self.app, "show_calibration", False)
+            self.app.show_calibration = new_val
+            self.app.calibrate_mode = new_val
 
     def process_image(self, input_bgr: np.ndarray, action: str = "") -> np.ndarray:
         with self.lock:
@@ -623,7 +625,7 @@ class ARStreamHandler(BaseHTTPRequestHandler):
                     let response;
                     if (mode === 'webcam' && video.readyState >= 2) {
                         offCtx.drawImage(video, 0, 0, 640, 360);
-                        const blob = await new Promise(resolve => offCanvas.toBlob(resolve, 'image/jpeg', 0.75));
+                        const blob = await new Promise(resolve => offCanvas.toBlob(resolve, 'image/jpeg', 0.85));
 
                         response = await fetch(`/api/process_frame?action=${act}`, {
                             method: 'POST',
@@ -636,7 +638,7 @@ class ARStreamHandler(BaseHTTPRequestHandler):
                         // Send webcam frame so user's real fingers are tracked to trigger expansion!
                         const srcVid = pipVideo.readyState >= 2 ? pipVideo : video;
                         offCtx.drawImage(srcVid, 0, 0, 640, 360);
-                        const blob = await new Promise(resolve => offCanvas.toBlob(resolve, 'image/jpeg', 0.75));
+                        const blob = await new Promise(resolve => offCanvas.toBlob(resolve, 'image/jpeg', 0.85));
 
                         response = await fetch(`/api/demo_frame?action=${act}`, {
                             method: 'POST',
