@@ -93,6 +93,7 @@ def create_mock_hand(
         "thumb_tip": landmarks[4],
         "ring_tip": landmarks[16],
         "pinky_tip": landmarks[20],
+        "bbox": (px - 50, py - 50, px + 50, py + 50),
     }
 
 
@@ -215,6 +216,162 @@ class TestGestureRecognizer(unittest.TestCase):
         res2 = self.rec.update(hands=[h1, h2], frame_shape=(720, 1280))
         self.assertEqual(res2["hands_count"], 2)
         self.assertEqual(self.rec.last_hands_count, 2)
+
+    def test_gojo_two_hands_forbidden(self):
+        """Test H: Exactly 1 hand required for Gojo; 2 hands must yield Gojo score 0.0."""
+        h1 = create_mock_hand(is_crossing_mudra=True, cross_ratio=0.25)
+        h2 = create_mock_hand(is_crossing_mudra=True, cross_ratio=0.25)
+        res = self.rec.update(hands=[h1, h2], frame_shape=(720, 1280))
+        self.assertEqual(res["gojo_score"], 0.0)
+
+    def test_sukuna_unattached_hands_forbidden(self):
+        """Test I: 2 hands far apart or index tips not touching must yield Sukuna score 0.0."""
+        scale = 36.0
+        h1 = create_mock_hand(palm_center=(300, 420), palm_scale=scale)
+        h2 = create_mock_hand(palm_center=(900, 420), palm_scale=scale)
+        h1["index_tip"] = (300, 320)
+        h2["index_tip"] = (900, 320)
+        res = self.rec.update(hands=[h1, h2], frame_shape=(720, 1280))
+        self.assertEqual(res["sukuna_score"], 0.0)
+
+    def test_segment_intersection_crossing(self):
+        """Test J: 2D segment intersection correctly distinguishes crossed fingers from parallel."""
+        from tracking.hand_tracker import segments_intersect_2d
+        # Case 1: Crossed segments
+        p1 = (100.0, 100.0)  # Index base
+        p2 = (120.0, 30.0)   # Index tip
+        p3 = (115.0, 100.0)  # Middle base
+        p4 = (95.0, 30.0)    # Middle tip (crosses over index)
+        self.assertTrue(segments_intersect_2d(p1, p2, p3, p4))
+
+        # Case 2: Parallel peace sign segments (uncrossed)
+        q1 = (100.0, 100.0)
+        q2 = (90.0, 30.0)
+        q3 = (115.0, 100.0)
+        q4 = (125.0, 30.0)
+        self.assertFalse(segments_intersect_2d(q1, q2, q3, q4))
+
+    def test_hair_false_detection_rejected(self):
+        """Test K: Hair/head textures with small palm scale or degenerate geometry are rejected."""
+        from tracking.hand_tracker import is_valid_hand_anatomy
+        # Valid hand
+        valid_hand = create_mock_hand(palm_scale=38.0)
+        self.assertTrue(is_valid_hand_anatomy(valid_hand))
+
+        # Tiny palm scale (< 20px) from hair texture noise
+        hair_tiny = create_mock_hand(palm_scale=12.0)
+        self.assertFalse(is_valid_hand_anatomy(hair_tiny))
+
+        # Degenerate palm breadth (collapsed points on hair strand)
+        hair_collapsed = create_mock_hand(palm_scale=35.0)
+        hair_collapsed["landmarks"][5] = (640, 300)
+        hair_collapsed["landmarks"][17] = (641, 300)  # breadth = 1px, ratio ~ 0.03
+        self.assertFalse(is_valid_hand_anatomy(hair_collapsed))
+
+        # Low handedness confidence
+        low_conf = create_mock_hand(palm_scale=35.0)
+        low_conf["handedness_conf"] = 0.32
+        self.assertFalse(is_valid_hand_anatomy(low_conf))
+
+    def test_strictly_two_classifications_mutual_exclusivity(self):
+        """Test L: Gojo and Sukuna are 100% mutually exclusive. Neither can score > 0 while other is active."""
+        # Gojo frame: exactly 1 hand crossed
+        gojo_hand = create_mock_hand(
+            palm_center=(640, 260),
+            finger_angles={"thumb": 95, "index": 165, "middle": 165, "ring": 75, "pinky": 75},
+            curl_ratios={"thumb": 0.85, "index": 1.65, "middle": 1.65, "ring": 0.85, "pinky": 0.85},
+            cross_ratio=0.25,
+            is_crossing_mudra=True,
+            thumb_tucked=True,
+        )
+        res_g = self.rec.update(hands=[gojo_hand], frame_shape=(720, 1280))
+        self.assertGreaterEqual(res_g["gojo_score"], 0.85)
+        self.assertEqual(res_g["sukuna_score"], 0.0)
+
+        # Sukuna frame: strictly 2 hands attached by fingers
+        scale = 36.0
+        h1 = create_mock_hand(
+            palm_center=(620, 420),
+            palm_scale=scale,
+            finger_angles={"thumb": 150, "index": 165, "middle": 95, "ring": 80, "pinky": 80},
+            curl_ratios={"thumb": 1.25, "index": 1.55, "middle": 0.95, "ring": 0.85, "pinky": 0.85},
+            handedness="Left",
+        )
+        h2 = create_mock_hand(
+            palm_center=(660, 420),
+            palm_scale=scale,
+            finger_angles={"thumb": 150, "index": 165, "middle": 95, "ring": 80, "pinky": 80},
+            curl_ratios={"thumb": 1.25, "index": 1.55, "middle": 0.95, "ring": 0.85, "pinky": 0.85},
+            handedness="Right",
+        )
+        h1["index_tip"] = (638, 320)
+        h2["index_tip"] = (642, 320)
+        res_s = self.rec.update(hands=[h1, h2], frame_shape=(720, 1280))
+        self.assertGreaterEqual(res_s["sukuna_score"], 0.85)
+        self.assertEqual(res_s["gojo_score"], 0.0)
+
+    def test_gojo_ring_extended_rejected(self):
+        """Test M: Gojo mudra must reject when ring finger is extended (not curled)."""
+        hand = create_mock_hand(
+            finger_angles={"thumb": 95, "index": 165, "middle": 165, "ring": 160, "pinky": 75},
+            curl_ratios={"thumb": 0.85, "index": 1.65, "middle": 1.65, "ring": 1.55, "pinky": 0.85},
+            cross_ratio=0.25,
+            is_crossing_mudra=True,
+        )
+        res = self.rec.update(hands=[hand], frame_shape=(720, 1280))
+        self.assertEqual(res["gojo_score"], 0.0)
+
+    def test_gojo_pointing_downwards_rejected(self):
+        """Test N: Gojo mudra pointing downwards to floor must be rejected."""
+        hand = create_mock_hand(
+            pointing_dir=(0.0, 0.8),  # pointing downwards
+            finger_angles={"thumb": 95, "index": 165, "middle": 165, "ring": 75, "pinky": 75},
+            curl_ratios={"thumb": 0.85, "index": 1.65, "middle": 1.65, "ring": 0.85, "pinky": 0.85},
+            cross_ratio=0.25,
+            is_crossing_mudra=True,
+        )
+        res = self.rec.update(hands=[hand], frame_shape=(720, 1280))
+        self.assertEqual(res["gojo_score"], 0.0)
+
+    def test_sukuna_open_praying_hands_rejected(self):
+        """Test O: 2 hands with open flat fingers (all extended) must NOT trigger Sukuna."""
+        scale = 36.0
+        h1 = create_mock_hand(
+            palm_center=(620, 420),
+            palm_scale=scale,
+            finger_angles={"thumb": 150, "index": 165, "middle": 165, "ring": 165, "pinky": 165},
+            curl_ratios={"thumb": 1.25, "index": 1.55, "middle": 1.55, "ring": 1.55, "pinky": 1.55},
+        )
+        h2 = create_mock_hand(
+            palm_center=(660, 420),
+            palm_scale=scale,
+            finger_angles={"thumb": 150, "index": 165, "middle": 165, "ring": 165, "pinky": 165},
+            curl_ratios={"thumb": 1.25, "index": 1.55, "middle": 1.55, "ring": 1.55, "pinky": 1.55},
+        )
+        h1["index_tip"] = (638, 320)
+        h2["index_tip"] = (642, 320)
+        res = self.rec.update(hands=[h1, h2], frame_shape=(720, 1280))
+        self.assertEqual(res["sukuna_score"], 0.0)
+
+    def test_sukuna_separated_index_tips_rejected(self):
+        """Test P: 2 hands where index tips are separated (> 2.0 scale) must NOT trigger Sukuna."""
+        scale = 36.0
+        h1 = create_mock_hand(
+            palm_center=(620, 420),
+            palm_scale=scale,
+            finger_angles={"thumb": 150, "index": 165, "middle": 95, "ring": 80, "pinky": 80},
+            curl_ratios={"thumb": 1.25, "index": 1.55, "middle": 0.95, "ring": 0.85, "pinky": 0.85},
+        )
+        h2 = create_mock_hand(
+            palm_center=(660, 420),
+            palm_scale=scale,
+            finger_angles={"thumb": 150, "index": 165, "middle": 95, "ring": 80, "pinky": 80},
+            curl_ratios={"thumb": 1.25, "index": 1.55, "middle": 0.95, "ring": 0.85, "pinky": 0.85},
+        )
+        h1["index_tip"] = (550, 320)  # far apart!
+        h2["index_tip"] = (750, 320)
+        res = self.rec.update(hands=[h1, h2], frame_shape=(720, 1280))
+        self.assertEqual(res["sukuna_score"], 0.0)
 
 
 if __name__ == "__main__":

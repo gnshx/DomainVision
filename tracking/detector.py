@@ -9,7 +9,7 @@ import mediapipe as mp
 from mediapipe.tasks.python import vision, BaseOptions
 
 from config import TRACK_WIDTH, TRACK_HEIGHT, SEGMENTATION_INTERVAL
-from tracking.hand_tracker import AdvancedHandTracker
+from tracking.hand_tracker import AdvancedHandTracker, is_valid_hand_anatomy
 
 
 class MediaPipeVisionTracker:
@@ -86,9 +86,9 @@ class MediaPipeVisionTracker:
                 hand_opts = vision.HandLandmarkerOptions(
                     base_options=BaseOptions(model_asset_path=hand_path),
                     num_hands=2,
-                    min_hand_detection_confidence=0.28,
-                    min_hand_presence_confidence=0.28,
-                    min_tracking_confidence=0.28,
+                    min_hand_detection_confidence=0.55,
+                    min_hand_presence_confidence=0.52,
+                    min_tracking_confidence=0.50,
                 )
                 self.hand_landmarker = vision.HandLandmarker.create_from_options(hand_opts)
 
@@ -234,6 +234,10 @@ class MediaPipeVisionTracker:
                             h_label = handedness_list[idx][0].category_name
                             h_conf = float(handedness_list[idx][0].score)
 
+                        # Filter out false detections on hair, ears, or background noise
+                        if h_conf < 0.48:
+                            continue
+
                         analyzed = self.hand_analyzer.analyze_hand(
                             hand_lms,
                             (orig_h, orig_w),
@@ -241,6 +245,10 @@ class MediaPipeVisionTracker:
                             handedness=h_label,
                             handedness_conf=h_conf,
                         )
+                        # Require genuine anatomical hand proportions (strictly reject hair textures)
+                        if not is_valid_hand_anatomy(analyzed):
+                            continue
+
                         result["hands"].append(analyzed)
                 else:
                     self.hand_analyzer.reset()

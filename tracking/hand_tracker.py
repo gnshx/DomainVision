@@ -23,6 +23,81 @@ def compute_angle_3d(a: Tuple[float, float, float], b: Tuple[float, float, float
     return float(np.degrees(np.arccos(cosine)))
 
 
+def segments_intersect_2d(
+    p1: Tuple[float, float],
+    p2: Tuple[float, float],
+    p3: Tuple[float, float],
+    p4: Tuple[float, float]
+) -> bool:
+    """
+    Tests whether 2D line segment (p1 -> p2) intersects with (p3 -> p4).
+    Used to detect if middle finger physically crosses over index finger in 2D projection.
+    """
+    def ccw(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    d1 = ccw(p1, p2, p3)
+    d2 = ccw(p1, p2, p4)
+    d3 = ccw(p3, p4, p1)
+    d4 = ccw(p3, p4, p2)
+
+    return (((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and
+            ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)))
+
+
+def is_valid_hand_anatomy(hand_dict: Dict[str, Any]) -> bool:
+    """
+    Validates anatomical hand proportions to reject false detections
+    caused by hair, ears, head contours, or background textures:
+    - Palm scale must represent genuine human hand proportions (> 20px)
+    - Palm width-to-height ratio must match human anatomy
+    - Landmark bounding box must have reasonable physical extent
+    """
+    lms = hand_dict.get("landmarks", [])
+    if len(lms) < 21:
+        return False
+
+    palm_scale = hand_dict.get("palm_scale", 0.0)
+    if palm_scale < 20.0:
+        return False
+
+    bbox = hand_dict.get("bbox")
+    if bbox is None and lms:
+        xs = [p[0] for p in lms]
+        ys = [p[1] for p in lms]
+        bbox = (min(xs), min(ys), max(xs), max(ys))
+    elif bbox is None:
+        bbox = (0, 0, 0, 0)
+
+    bw = bbox[2] - bbox[0]
+    bh = bbox[3] - bbox[1]
+    if bw < 25 or bh < 25:
+        return False
+
+    # Check palm breadth (dist between Index MCP 5 and Pinky MCP 17)
+    p0 = lms[0]   # wrist
+    p5 = lms[5]   # index MCP
+    p9 = lms[9]   # middle MCP
+    p17 = lms[17] # pinky MCP
+
+    palm_breadth = math.dist(p5, p17)
+    palm_len = math.dist(p0, p9)
+    if palm_len < 1e-4:
+        return False
+
+    ratio = palm_breadth / palm_len
+    # Human hands have breadth-to-length ratio between 0.22 and 1.60
+    # Hair/head texture false detections collapse into degenerate lines or tiny clumps
+    if ratio < 0.20 or ratio > 1.70:
+        return False
+
+    # Handedness confidence filter
+    if hand_dict.get("handedness_conf", 1.0) < 0.48:
+        return False
+
+    return True
+
+
 class AdvancedHandTracker:
     """
     Precision hand and finger tracking:
@@ -170,16 +245,28 @@ class AdvancedHandTracker:
         trans_mid_mcp = normalized_local_lms[9][0]
 
         # In natural uncrossed hand, index is on the index-MCP side of middle.
-        # When crossed, tips swap relative transverse positions or get extremely close (< 0.38 scale)
+        # When crossed, tips swap relative transverse positions or get close (< 0.42 scale)
         base_sign = 1.0 if (trans_idx_mcp > trans_mid_mcp) else -1.0
         tip_sign = 1.0 if (trans_idx_tip > trans_mid_tip) else -1.0
         is_crossed_swap = (base_sign * tip_sign < 0.0)
 
+        # Direct 2D Line Segment Intersection:
+        # Index finger segment (MCP 5 or PIP 6 -> TIP 8) vs Middle finger segment (MCP 9 or PIP 10 -> TIP 12)
+        idx_pip = smoothed_2d[6]
+        mid_pip = smoothed_2d[10]
+        seg_intersect = (
+            segments_intersect_2d(smoothed_2d[5], index_tip_2d, smoothed_2d[9], middle_tip_2d) or
+            segments_intersect_2d(idx_pip, index_tip_2d, mid_pip, middle_tip_2d)
+        )
+
+        idx_active = finger_states["index"] in ["EXTENDED", "BENT"]
+        mid_active = finger_states["middle"] in ["EXTENDED", "BENT"]
+
         is_crossing_mudra = (
-            cross_ratio < 0.40
-            and finger_states["index"] == "EXTENDED"
-            and finger_states["middle"] == "EXTENDED"
-        ) or (is_crossed_swap and cross_ratio < 0.55)
+            (seg_intersect and idx_active and mid_active) or
+            (is_crossed_swap and cross_ratio < 0.52 and idx_active and mid_active) or
+            (cross_ratio < 0.38 and idx_active and mid_active)
+        )
 
         # Bounding Box
         xs = [p[0] for p in smoothed_2d]
@@ -320,6 +407,16 @@ def generate_synthetic_mudra_hands(
             "pinky_tip": pinky_tip,
             "index_pip": lms[6],
             "middle_pip": lms[10],
+            "cross_ratio": 0.22 if theme_name == "infinite_void" else 0.85,
+            "is_crossing_mudra": (theme_name == "infinite_void"),
+            "thumb_tucked": (theme_name == "infinite_void"),
+            "palm_y_norm": float(py / float(h)),
         }
 
-    return [make_hand(p1, is_left=True, theme_name=theme), make_hand(p2, is_left=False, theme_name=theme)]
+    if theme == "infinite_void":
+        # Gojo Taishakuten mudra: exactly ONE hand raised to eye/face level with fingers crossed
+        gojo_palm = (cx, int(h * 0.40))
+        return [make_hand(gojo_palm, is_left=False, theme_name="infinite_void")]
+
+    # Sukuna Enma-ten mudra: strictly TWO hands clasped at chest level
+    return [make_hand(p1, is_left=True, theme_name="malevolent_shrine"), make_hand(p2, is_left=False, theme_name="malevolent_shrine")]

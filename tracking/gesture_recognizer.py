@@ -70,148 +70,91 @@ class CanonicalGestureRecognizer:
     ) -> Tuple[float, Optional[Tuple[int, int]], Dict[str, Any]]:
         """
         Evaluates Gojo's Taishakuten Mudra (無量空処):
-        1. 1 primary active hand (suppressed if 2 hands are clasped together in Sukuna territory)
-        2. Vertical position: hand held near face/head level (palm_y < h * 0.68)
-        3. Hand pointing upright: pointing_dir[1] < -0.30
-        4. Index & Middle fingers extended: angles > 135°, curl_ratio > 1.30
-        5. Middle finger crossing Index finger: cross_ratio < 0.40 or crossing swap
-        6. Ring & Pinky curled: angles < 125°, curl_ratio < 1.15
-        7. Thumb folded: tucked into palm / ring MCP
+        CLASSIFICATION 1: Exactly 1 hand with 2 fingers crossed
+        - Strictly 1 hand (returns 0.0 if hands count != 1)
+        - Index and Middle fingers upright / active
+        - Middle finger crossed over Index finger (2 fingers crossed)
+        - Ring and Pinky curled tightly into palm
+        - Thumb folded inward (not upright like Sukuna)
         """
-        if not hands:
-            return 0.0, None, {"status": "no_hands"}
+        # STRICT RULE: Must be EXACTLY 1 hand
+        if len(hands) != 1:
+            return 0.0, None, {"reason": "requires_strictly_1_hand", "hands_count": len(hands)}
 
-        # If two hands are clasped close together, this is Sukuna territory — suppress Gojo
-        if len(hands) >= 2:
-            p1 = hands[0]["palm_center"]
-            p2 = hands[1]["palm_center"]
-            avg_scale = (hands[0].get("palm_scale", 30) + hands[1].get("palm_scale", 30)) / 2.0
-            if math.dist(p1, p2) < avg_scale * 3.4:
-                return 0.0, None, {"suppressed": "dual_hands_clasped"}
+        h = hands[0]
+        fa = h.get("finger_angles", {})
+        fs = h.get("finger_states", {})
+        cr = h.get("curl_ratios", {})
 
-        best_score = 0.0
-        best_center = None
-        best_metrics = {}
+        # 1. Crossing check (MANDATORY REQUIREMENT: 2 fingers crossed)
+        cross_ratio = h.get("cross_ratio", 1.0)
+        is_crossing = h.get("is_crossing_mudra", False)
 
-        for h in hands:
-            scale = max(10.0, h.get("palm_scale", 30))
-            fa = h.get("finger_angles", {})
-            fs = h.get("finger_states", {})
-            cr = h.get("curl_ratios", {})
+        # Rejection gate: Must have finger crossing!
+        # If cross_ratio >= 0.45 and not crossing flag, parallel fingers (e.g. peace sign) -> REJECT
+        if not is_crossing and cross_ratio >= 0.45:
+            return 0.0, None, {"reason": "fingers_not_crossed", "cross_ratio": cross_ratio}
 
-            # 1. Height check: Gojo sign is canonically held near face/eyes/head
-            palm_y_norm = h.get("palm_y_norm", 0.5)
-            # Full score if held above 0.55 frame height; penalty if held low at chest/waist
-            if palm_y_norm < 0.52:
-                h_score = 1.0
-            elif palm_y_norm < 0.68:
-                h_score = 0.75
-            else:
-                h_score = 0.30
+        # 2. Extension check: Index and Middle fingers must be upright/active
+        i_up = (fa.get("index", 0) > 125) or (cr.get("index", 0) > 1.20) or (fs.get("index") in ["EXTENDED", "BENT"])
+        m_up = (fa.get("middle", 0) > 115) or (cr.get("middle", 0) > 1.15) or (fs.get("middle") in ["EXTENDED", "BENT"])
 
-            # 2. Hand pointing upright
-            dir_y = h.get("pointing_dir", (0, 0))[1]
-            if dir_y < -0.40:
-                dir_score = 1.0
-            elif dir_y < -0.15:
-                dir_score = 0.65
-            else:
-                dir_score = 0.15
+        if not (i_up and m_up):
+            return 0.0, None, {"reason": "index_or_middle_not_upright"}
 
-            # 3. Index & Middle extended
-            i_ext = (fa.get("index", 0) > 135) or (cr.get("index", 0) > 1.30)
-            m_ext = (fa.get("middle", 0) > 135) or (cr.get("middle", 0) > 1.30)
-            if i_ext and m_ext:
-                ext_score = 1.0
-            elif i_ext or m_ext:
-                ext_score = 0.25
-            else:
-                ext_score = 0.0
+        # 3. Curled check: Ring and Pinky must be curled into palm
+        r_cur = (fa.get("ring", 180) < 135) or (cr.get("ring", 2) < 1.20) or (fs.get("ring") == "CURLED")
+        p_cur = (fa.get("pinky", 180) < 135) or (cr.get("pinky", 2) < 1.20) or (fs.get("pinky") == "CURLED")
 
-            # 4. Canonical Crossing Check (THE CRUCIAL DIFFERENTIATOR)
-            # Standard uncrossed fingers have cross_ratio > 0.48; crossed fingers have < 0.38
-            cross_ratio = h.get("cross_ratio", 1.0)
-            is_crossing = h.get("is_crossing_mudra", False)
+        if not (r_cur and p_cur):
+            # Allow 1 curled if other bent, but reject if wide open
+            r_open = (fa.get("ring", 0) > 140) and (cr.get("ring", 0) > 1.25)
+            p_open = (fa.get("pinky", 0) > 140) and (cr.get("pinky", 0) > 1.25)
+            if r_open or p_open:
+                return 0.0, None, {"reason": "ring_or_pinky_not_curled"}
 
-            if is_crossing and cross_ratio < 0.36:
-                cross_score = 1.0
-            elif is_crossing or cross_ratio < 0.42:
-                cross_score = 0.85
-            elif cross_ratio < 0.50:
-                cross_score = 0.40
-            else:
-                # Parallel fingers (e.g. peace sign or two fingers point)
-                cross_score = 0.0
+        # 4. Vertical hand orientation: Hand should point generally upward
+        dir_y = h.get("pointing_dir", (0, 0))[1]
+        if dir_y > 0.35:
+            return 0.0, None, {"reason": "hand_pointing_downwards"}
 
-            # 5. Ring & Pinky curled tightly into palm
-            r_cur = (fa.get("ring", 180) < 125) or (cr.get("ring", 2) < 1.15) or (fs.get("ring") == "CURLED")
-            p_cur = (fa.get("pinky", 180) < 125) or (cr.get("pinky", 2) < 1.15) or (fs.get("pinky") == "CURLED")
-            if r_cur and p_cur:
-                curl_score = 1.0
-            elif r_cur or p_cur:
-                curl_score = 0.45
-            else:
-                curl_score = 0.0
+        # 5. Height bonus: canonically held near head/face level
+        palm_y_norm = h.get("palm_y_norm", 0.5)
 
-            # 6. Thumb folded inward
-            thumb_tucked = h.get("thumb_tucked", False) or (fa.get("thumb", 180) < 130)
-            thumb_score = 1.0 if thumb_tucked else 0.40
+        # 6. Thumb check: thumb tucked or folded
+        thumb_tucked = h.get("thumb_tucked", False) or (fa.get("thumb", 180) < 135)
 
-            # Compute weighted geometric evidence
-            # Hard rejection gates: must have extension and curl
-            if ext_score < 0.5 or curl_score < 0.4:
-                cand_score = 0.0
-            else:
-                cand_score = (
-                    0.30 * cross_score
-                    + 0.22 * ext_score
-                    + 0.20 * curl_score
-                    + 0.12 * h_score
-                    + 0.10 * dir_score
-                    + 0.06 * thumb_score
-                )
+        # Calculate confidence score
+        cross_quality = 1.0 if (is_crossing and cross_ratio < 0.38) else 0.88
+        curl_quality = 1.0 if (r_cur and p_cur) else 0.85
+        thumb_quality = 1.0 if thumb_tucked else 0.88
+        height_quality = 1.0 if (palm_y_norm < 0.65) else 0.88
 
-                lm = h.get("landmarks", [])
-                thumb_mcp_y = lm[2][1] if len(lm) > 2 else h["wrist"][1]
-                thumb_up = (fa.get("thumb", 0) > 120) and (h["thumb_tip"][1] < thumb_mcp_y)
-                if thumb_up:
-                    # Sukuna signature: upright thumb must NOT trigger Gojo
-                    cand_score = max(0.0, cand_score - 0.40)
+        total_score = 0.85 + 0.05 * cross_quality + 0.04 * curl_quality + 0.03 * thumb_quality + 0.03 * height_quality
 
-                # Cap score if crossing is absent — Gojo CANNOT activate without finger crossing!
-                if cross_score < 0.4:
-                    cand_score = min(0.35, cand_score)
-
-            if cand_score > best_score:
-                best_score = cand_score
-                best_center = h["palm_center"]
-                best_metrics = {
-                    "cross_ratio": cross_ratio,
-                    "cross_score": cross_score,
-                    "ext_score": ext_score,
-                    "curl_score": curl_score,
-                    "height_score": h_score,
-                    "dir_y": dir_y,
-                    "palm_y_norm": palm_y_norm,
-                }
-
-        return min(1.0, best_score), best_center, best_metrics
+        center = h["palm_center"]
+        metrics = {
+            "cross_ratio": cross_ratio,
+            "is_crossing": is_crossing,
+            "palm_y_norm": palm_y_norm,
+            "score": total_score,
+        }
+        return min(1.0, total_score), center, metrics
 
     def evaluate_sukuna_mudra(
         self, hands: List[Dict[str, Any]], frame_shape: Tuple[int, int]
     ) -> Tuple[float, Optional[Tuple[int, int]], Dict[str, Any]]:
         """
         Evaluates Sukuna's Enma-ten Mudra (伏魔御廚子):
-        1. STRICTLY 2 HANDS REQUIRED. (1 hand score is strictly 0.0)
-        2. Hands positioned at chest / center torso (0.28 < y_norm < 0.85)
-        3. Palms brought together: palm_dist < 2.5 * avg_scale
-        4. Upward wrist and hand orientation: pointing_dir_y < 0.15 for both hands
-        5. Thumbs upright and extended: thumb_angle > 125° or curl_ratio > 1.15
-        6. Index fingertips meeting: dist(tip1, tip2) < 1.15 * avg_scale
-        7. Lower fingers curled: at least 3 of 4 ring/pinky fingers curled
-        8. Palms facing each other
+        CLASSIFICATION 2: Exactly 2 hands attached by 2 fingers
+        - Strictly 2 hands required (returns 0.0 if hands count != 2)
+        - Attached by 2 index fingers: index fingertips touching / meeting (idx_dist / avg_scale < 2.0)
+        - Hands clasped together: palm_dist / avg_scale < 3.2
+        - Both index fingers extended upright
+        - Lower fingers (ring, pinky) curled into palms
+        - Thumbs upright and extended
         """
-        # STRICT RULE: Sukuna CANNOT be classified from a single hand
+        # STRICT RULE: Sukuna requires strictly 2 hands
         if len(hands) != 2:
             return 0.0, None, {"hands_count": len(hands), "reason": "requires_strictly_2_hands"}
 
@@ -221,118 +164,61 @@ class CanonicalGestureRecognizer:
         scale2 = max(10.0, h2.get("palm_scale", 30))
         avg_scale = (scale1 + scale2) / 2.0
 
-        metrics = {}
+        # 1. Attached by 2 fingers check (Index fingertips touching / meeting)
+        idx_dist = math.dist(h1["index_tip"], h2["index_tip"])
+        idx_ratio = idx_dist / avg_scale
+        if idx_ratio > 2.0:
+            return 0.0, None, {"reason": "index_fingertips_not_touching", "idx_ratio": idx_ratio}
 
-        # 1. Height check: Sukuna mudra is held around chest / center region
-        avg_y_norm = (h1.get("palm_y_norm", 0.5) + h2.get("palm_y_norm", 0.5)) / 2.0
-        metrics["avg_y_norm"] = avg_y_norm
-        if 0.28 <= avg_y_norm <= 0.85:
-            h_score = 1.0
-        else:
-            h_score = 0.50
-
-        # 2. Palm proximity: hands clasped together
+        # 2. Palm proximity check (hands clasped together)
         palm_dist = math.dist(p1, p2)
         palm_ratio = palm_dist / avg_scale
-        metrics["palm_dist_ratio"] = palm_ratio
+        if palm_ratio > 3.2:
+            return 0.0, None, {"reason": "hands_too_far_apart", "palm_ratio": palm_ratio}
 
-        if palm_ratio < 1.9:
-            proximity_score = 1.0
-        elif palm_ratio < 2.6:
-            proximity_score = 0.75
-        elif palm_ratio < 3.4:
-            proximity_score = 0.40
-        else:
-            proximity_score = 0.0
-
-        # 3. Upright hand orientation: both hands pointing up or toward center
-        dir1_y = h1.get("pointing_dir", (0, 0))[1]
-        dir2_y = h2.get("pointing_dir", (0, 0))[1]
-        metrics["dir1_y"] = dir1_y
-        metrics["dir2_y"] = dir2_y
-        if dir1_y < -0.10 and dir2_y < -0.10:
-            dir_score = 1.0
-        elif dir1_y < 0.15 and dir2_y < 0.15:
-            dir_score = 0.75
-        else:
-            dir_score = 0.20
-
-        # 4. Thumbs upright & extended on both hands
+        # 3. Index fingers upright check
         ang1 = h1.get("finger_angles", {})
         ang2 = h2.get("finger_angles", {})
         cr1 = h1.get("curl_ratios", {})
         cr2 = h2.get("curl_ratios", {})
+        fs1 = h1.get("finger_states", {})
+        fs2 = h2.get("finger_states", {})
 
-        t1_ext = (ang1.get("thumb", 0) > 125) or (cr1.get("thumb", 0) > 1.12)
-        t2_ext = (ang2.get("thumb", 0) > 125) or (cr2.get("thumb", 0) > 1.12)
-        if t1_ext and t2_ext:
-            thumb_score = 1.0
-        elif t1_ext or t2_ext:
-            thumb_score = 0.55
-        else:
-            thumb_score = 0.10
+        i1_up = (ang1.get("index", 0) > 120) or (cr1.get("index", 0) > 1.20) or (fs1.get("index") in ["EXTENDED", "BENT"])
+        i2_up = (ang2.get("index", 0) > 120) or (cr2.get("index", 0) > 1.20) or (fs2.get("index") in ["EXTENDED", "BENT"])
+        if not (i1_up and i2_up):
+            return 0.0, None, {"reason": "index_fingers_not_upright"}
 
-        # 5. Index fingertips touching / meeting at top
-        idx_dist = math.dist(h1["index_tip"], h2["index_tip"])
-        idx_ratio = idx_dist / avg_scale
-        metrics["index_dist_ratio"] = idx_ratio
-
-        i1_ext = (ang1.get("index", 0) > 130) or (cr1.get("index", 0) > 1.25)
-        i2_ext = (ang2.get("index", 0) > 130) or (cr2.get("index", 0) > 1.25)
-
-        if idx_ratio < 1.10 and (i1_ext or i2_ext):
-            index_score = 1.0
-        elif idx_ratio < 1.80 and (i1_ext or i2_ext):
-            index_score = 0.75
-        elif idx_ratio < 2.50:
-            index_score = 0.35
-        else:
-            index_score = 0.0
-
-        # 6. Lower fingers (Ring & Pinky) curled on BOTH hands
+        # 4. Lower fingers curled (ring & pinky curled into palms)
         curled_count = 0
-        for h, ang, cr in [(h1, ang1, cr1), (h2, ang2, cr2)]:
+        for ang, cr, fs in [(ang1, cr1, fs1), (ang2, cr2, fs2)]:
             for f in ["ring", "pinky"]:
-                if (ang.get(f, 180) < 135) or (cr.get(f, 2) < 1.20):
+                if (ang.get(f, 180) < 135) or (cr.get(f, 2) < 1.20) or (fs.get(f) == "CURLED"):
                     curled_count += 1
-        metrics["curled_lower_count"] = curled_count
 
-        if curled_count >= 3:
-            lower_score = 1.0
-        elif curled_count == 2:
-            lower_score = 0.60
-        else:
-            lower_score = 0.20
+        if curled_count < 2:
+            return 0.0, None, {"reason": "lower_fingers_not_curled", "curled_count": curled_count}
 
-        # 7. Palms facing each other
-        norm1 = h1.get("palm_normal", (0, 0, 1))
-        norm2 = h2.get("palm_normal", (0, 0, 1))
-        dot_normals = norm1[0] * norm2[0] + norm1[1] * norm2[1] + norm1[2] * norm2[2]
-        metrics["dot_normals"] = dot_normals
+        # 5. Hand direction: both hands pointing generally upwards / towards center
+        dir1_y = h1.get("pointing_dir", (0, 0))[1]
+        dir2_y = h2.get("pointing_dir", (0, 0))[1]
+        if dir1_y > 0.40 or dir2_y > 0.40:
+            return 0.0, None, {"reason": "hands_pointing_downwards"}
 
-        # Palms facing each other have negative dot product or opposite horizontal vectors
-        if dot_normals < 0.10:
-            facing_score = 1.0
-        elif dot_normals < 0.40:
-            facing_score = 0.70
-        else:
-            facing_score = 0.35
+        # Calculate confidence score
+        touch_quality = 1.0 if idx_ratio < 1.2 else 0.88
+        proximity_quality = 1.0 if palm_ratio < 2.2 else 0.88
+        curl_quality = 1.0 if curled_count >= 3 else 0.88
 
-        # Hard rejection: hands too far apart or all fingers flat/open
-        if proximity_score < 0.30:
-            total_score = 0.0
-        else:
-            total_score = (
-                0.25 * proximity_score
-                + 0.22 * index_score
-                + 0.18 * thumb_score
-                + 0.15 * lower_score
-                + 0.10 * dir_score
-                + 0.05 * facing_score
-                + 0.05 * h_score
-            )
+        total_score = 0.85 + 0.06 * touch_quality + 0.05 * proximity_quality + 0.04 * curl_quality
 
         center = (int((p1[0] + p2[0]) / 2), int((p1[1] + p2[1]) / 2))
+        metrics = {
+            "idx_dist_ratio": idx_ratio,
+            "palm_dist_ratio": palm_ratio,
+            "curled_lower_count": curled_count,
+            "score": total_score,
+        }
         return min(1.0, total_score), center, metrics
 
     def update(
@@ -433,10 +319,10 @@ class CanonicalGestureRecognizer:
                 self.stable_frames += 1
 
             # Advance state from CANDIDATE to CONFIRMED
+            self.detected_sign_name = active_name
             if self.stable_frames >= self.hold_frames_required:
                 self.state = f"{frame_class}_CONFIRMED"
                 self.confirmed_sign = frame_class
-                self.detected_sign_name = active_name
             else:
                 self.state = f"{frame_class}_CANDIDATE"
 
