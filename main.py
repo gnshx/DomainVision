@@ -398,7 +398,7 @@ class DomainExpansionApp:
                 gesture_info.get("sign_detected")
                 or (
                     gesture_info.get("candidate_sign") in ["GOJO", "SUKUNA"]
-                    and gesture_info.get("stable_frames", 0) >= 2
+                    and gesture_info.get("stable_frames", 0) >= 5
                     and gesture_info.get("match_pct", 0) >= 78
                 )
             ):

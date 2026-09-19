@@ -92,13 +92,13 @@ class CanonicalGestureRecognizer:
         fs = h.get("finger_states", {})
         cr = h.get("curl_ratios", {})
 
-        # Rule 2: 2 fingers crossed check (middle finger crossed over index finger)
+        # Rule 2: 2 fingers crossed check (middle finger crossed over or meeting index finger)
         cross_ratio = h.get("cross_ratio", 1.0)
         is_crossing = h.get("is_crossing_mudra", False)
         is_crossed_swap = h.get("is_crossed_swap", False)
 
-        # Must genuinely cross! Either segments intersect or transverse positions swapped
-        if not is_crossing and not (is_crossed_swap and cross_ratio < 0.44):
+        # Crossed fingers or overlapping fingertips (cross_ratio < 0.44 or crossing mudra detected)
+        if not is_crossing and not is_crossed_swap and cross_ratio >= 0.44:
             return 0.0, None, {"reason": "fingers_not_crossed", "cross_ratio": cross_ratio}
 
         # Rule 4: Index & Middle fingers upright
@@ -108,7 +108,7 @@ class CanonicalGestureRecognizer:
         if not (i_up and m_up):
             return 0.0, None, {"reason": "index_or_middle_not_upright"}
 
-        # Rule 5: Ring & Pinky curled into palm
+        # Rule 5: Ring & Pinky curled into palm (must not be extended open)
         r_open = (fa.get("ring", 0) > 140) and (cr.get("ring", 0) > 1.25)
         p_open = (fa.get("pinky", 0) > 140) and (cr.get("pinky", 0) > 1.25)
         if r_open or p_open:
@@ -117,33 +117,27 @@ class CanonicalGestureRecognizer:
         r_cur = (fa.get("ring", 180) < 135) or (cr.get("ring", 2) < 1.20) or (fs.get("ring") == "CURLED")
         p_cur = (fa.get("pinky", 180) < 135) or (cr.get("pinky", 2) < 1.20) or (fs.get("pinky") == "CURLED")
 
-        # Rule 6: Hand pointing strictly upward towards ceiling (negative Y)
+        # Rule 6: Hand pointing generally upwards towards ceiling (negative Y)
         dir_y = h.get("pointing_dir", (0, 0))[1]
-        if dir_y > -0.15:
+        if dir_y > -0.10:
             return 0.0, None, {"reason": "hand_pointing_downwards", "dir_y": dir_y}
 
-        # Rule 7: Thumb check (thumb folded inward, strictly NOT upright or extended)
+        # Rule 7: Thumb check (reject fully open/hitchhiker extended thumb: angle >= 155 and not tucked)
         thumb_tucked = h.get("thumb_tucked", False) or (fa.get("thumb", 180) < 135)
-        thumb_state = fs.get("thumb", "UNKNOWN")
-        if (thumb_state == "EXTENDED" and not thumb_tucked) or fa.get("thumb", 180) > 140:
-            return 0.0, None, {"reason": "thumb_extended_not_tucked", "thumb_state": thumb_state}
+        if not thumb_tucked and fa.get("thumb", 180) >= 155:
+            return 0.0, None, {"reason": "thumb_open_extended", "thumb_angle": fa.get("thumb")}
 
-        # Rule 8: Canonical eye/face/head height for live webcam hands (never down at torso/chest)
-        is_ref = h.get("is_reference", False)
-        if not is_ref and palm_y_norm > 0.60:
-            return 0.0, None, {"reason": "hand_at_torso_level_for_gojo", "palm_y_norm": palm_y_norm}
+        cross_quality = 1.0 if (cross_ratio < 0.35 or is_crossing) else 0.90
+        curl_quality = 1.0 if (r_cur and p_cur) else 0.88
+        thumb_quality = 1.0 if thumb_tucked else 0.92
 
-        cross_quality = 1.0 if (is_crossing and cross_ratio < 0.36) else 0.88
-        curl_quality = 1.0 if (r_cur and p_cur) else 0.85
-        thumb_quality = 1.0 if thumb_tucked else 0.88
-
-        total_score = 0.85 + 0.06 * cross_quality + 0.05 * curl_quality + 0.04 * thumb_quality
+        total_score = 0.86 + 0.06 * cross_quality + 0.05 * curl_quality + 0.03 * thumb_quality
 
         center = h["palm_center"]
         metrics = {
             "cross_ratio": cross_ratio,
             "is_crossing": is_crossing,
-            "palm_y_norm": palm_y_norm,
+            "thumb_tucked": thumb_tucked,
             "score": total_score,
         }
         return min(1.0, total_score), center, metrics
