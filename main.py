@@ -236,8 +236,11 @@ class DomainExpansionApp:
             self.domain_layers.set_theme(theme_name)
             print(f"Switched theme to: {self.theme_name} ({THEMES[theme_name]['name_ja']})")
 
-    def trigger_domain(self):
+    def trigger_domain(self, target_theme: Optional[str] = None):
         """Force-trigger Domain Expansion sequence matching canonical audio-visual timeline."""
+        if target_theme and target_theme in THEMES and target_theme != self.theme_name:
+            self.set_theme(target_theme)
+
         if self.state in ["NORMAL", "CHARGING"]:
             now = time.time()
             self.seq_start_time = now
@@ -258,7 +261,7 @@ class DomainExpansionApp:
 
     def _update_timeline_state_machine(self, gesture_info: dict):
         """
-        Synchronizes animations to the canonical Crunchyroll Sukuna activation timing:
+        Synchronizes animations to the canonical Crunchyroll activation timing:
         0.00s : Hand sign recognized
         0.05s : Charge sound & particle intake
         0.70s : Energy builds & tremor intensifies
@@ -268,14 +271,35 @@ class DomainExpansionApp:
         1.50s : Domain environment expansion & looping ambience
         """
         now = time.time()
+
+        # Determine theme directly from the recognized candidate or confirmed mudra
+        active_sign = gesture_info.get("confirmed_sign")
+        if active_sign not in ["GOJO", "SUKUNA"]:
+            active_sign = gesture_info.get("candidate_sign")
+
+        if active_sign == "GOJO":
+            mudra_theme = "infinite_void"
+        elif active_sign == "SUKUNA":
+            mudra_theme = "malevolent_shrine"
+        else:
+            mudra_theme = self.theme_name
+
+        # Ensure theme is switched if candidate mudra is recognized
+        if mudra_theme != self.theme_name and active_sign in ["GOJO", "SUKUNA"] and self.state in ["NORMAL", "CHARGING"]:
+            self.set_theme(mudra_theme)
+
         theme_info = self.env_renderer.theme
 
         # 1. NORMAL State: Check for mudra trigger
         if self.state == "NORMAL":
             if gesture_info["trigger"]:
-                self.trigger_domain()
-            elif gesture_info["hold_progress"] > 0.25:
+                if mudra_theme != self.theme_name:
+                    self.set_theme(mudra_theme)
+                self.trigger_domain(mudra_theme)
+            elif gesture_info["hold_progress"] > 0.20:
                 # Sign held long enough to start initial charge windup
+                if mudra_theme != self.theme_name:
+                    self.set_theme(mudra_theme)
                 self.state = "CHARGING"
                 self.seq_start_time = now
                 self.state_start_time = now
@@ -391,18 +415,15 @@ class DomainExpansionApp:
             target_theme=self.theme_name,
         )
 
-        # Automatic character theme switching based strictly on stable confirmed/candidate mudra!
-        detected_theme = gesture_info.get("detected_theme")
-        if detected_theme and self.state == "NORMAL":
-            if detected_theme != self.theme_name and (
-                gesture_info.get("sign_detected")
-                or (
-                    gesture_info.get("candidate_sign") in ["GOJO", "SUKUNA"]
-                    and gesture_info.get("stable_frames", 0) >= 5
-                    and gesture_info.get("match_pct", 0) >= 78
-                )
-            ):
-                self.set_theme(detected_theme)
+        # Automatic character theme switching based strictly on candidate or confirmed mudra!
+        candidate = gesture_info.get("candidate_sign")
+        confirmed = gesture_info.get("confirmed_sign")
+        active_sign = confirmed if confirmed in ["GOJO", "SUKUNA"] else candidate
+
+        if active_sign in ["GOJO", "SUKUNA"]:
+            target_theme = "infinite_void" if active_sign == "GOJO" else "malevolent_shrine"
+            if target_theme != self.theme_name and self.state in ["NORMAL", "CHARGING"]:
+                self.set_theme(target_theme)
 
         if gesture_info.get("energy_center"):
             self.energy_center = gesture_info["energy_center"]
