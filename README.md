@@ -7,12 +7,12 @@
 [![OpenCV](https://img.shields.io/badge/OpenCV-4.8%2B-5C3EE8.svg)](https://opencv.org/)
 [![MediaPipe](https://img.shields.io/badge/MediaPipe-1.0%2B-0078D7.svg)](https://developers.google.com/mediapipe)
 [![Benchmarks](https://img.shields.io/badge/Benchmark-35.8%20FPS%20Sync%20%7C%2050%2B%20FPS%20Decoupled-00C853.svg)](PERFORMANCE_BASELINE.md)
-[![Tests](https://img.shields.io/badge/Tests-Passing%20(6%2F6)-brightgreen.svg)](tests/test_gestures.py)
+[![Tests](https://img.shields.io/badge/Tests-Passing%20(20%2F20)-brightgreen.svg)](tests/test_gestures.py)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 *An authentic, cinematic **Jujutsu Kaisen**-inspired Domain Expansion AR pipeline featuring invariant multi-class hand-sign recognition, SIMD-accelerated effects, neural selfie segmentation, and canonical audio synchronization.*
 
-[Key Features](#-key-features) • [System Architecture](#-system-architecture) • [Mudra Recognition](#-canonical-mudra-recognition) • [Performance Benchmarks](#-performance-benchmarks) • [Quickstart](#-quickstart) • [Web Application](#-web-application--remote-ssh) • [Calibration & Debugging](#-calibration--debugging) • [Controls](#-interactive-controls)
+[Key Features](#-key-features) • [Visual Mudra Guide](#-canonical-mudra-recognition) • [Continuous Testing](#-continuous-reference-symbol-stream-testing) • [System Architecture](#-system-architecture) • [Quickstart](#-quickstart) • [Deployment](#-cloud--container-deployment) • [Web Application](#-web-application--remote-ssh) • [Calibration & Debugging](#-calibration--debugging) • [Controls](#-interactive-controls)
 
 ---
 
@@ -43,6 +43,36 @@ Mudra evaluation uses hand-scale invariant geometric metrics rather than raw scr
 |---|---|---|---|
 | **Malevolent Shrine**<br>`伏魔御廚子` | **Ryomen Sukuna** | **Enma-ten Mudra**<br>*(閻魔天印 / Yama)* | • **Hands Detected**: **Strictly 2 hands** ($N = 2$). Single hand scores $0\%$.<br>• **Palm Proximity**: Inter-wrist distance $< 1.15 \times$ palm scale.<br>• **Thumbs**: Upright alignment ($u_{long} \cdot [0, -1] > 0.45$).<br>• **Index Fingers**: Fingertip distance $< 0.50 \times$ palm scale.<br>• **Lower Fingers**: Middle, ring, and pinky curled inward ($> 0.60$ curl ratio). |
 | **Infinite Void**<br>`無量空処` | **Satoru Gojo** | **Taishakuten Mudra**<br>*(帝釈天印 / Indra)* | • **Hands Detected**: **Exactly 1 hand** ($N = 1$). 2 hands score $0\%$.<br>• **Spatial Height**: Hand raised to head/eye level ($y_{wrist} < 0.62$).<br>• **Finger Crossing**: Middle finger crossed over index finger ($\text{cross\_ratio} < 0.40$).<br>• **Extended Fingers**: Index and middle fully extended ($< 0.40$ curl ratio).<br>• **Folded Fingers**: Ring and pinky tucked into palm ($> 0.65$ curl ratio). |
+
+### 📸 Visual Mudra Reference & How-To Guide
+
+To guarantee 100% trigger accuracy, replicate the canonical anime hand positions shown below:
+
+<div align="center">
+
+| Satoru Gojo (五条悟) — Infinite Void | Ryomen Sukuna (両面宿儺) — Malevolent Shrine |
+| :---: | :---: |
+| <img src="test_images/gojo_reference.png" alt="Satoru Gojo - Infinite Void Mudra" width="380"/> | <img src="test_images/sukuna_reference.png" alt="Ryomen Sukuna - Malevolent Shrine Mudra" width="460"/> |
+| **Taishakuten Mudra (帝釈天印 / Indra)** | **Enma-ten Mudra (閻魔天印 / Yama)** |
+| **Strictly 1 Hand** Raised to Face/Chest | **Strictly 2 Hands** Clasped Together |
+
+</div>
+
+#### 🌌 Satoru Gojo — Infinite Void (`無量空処`)
+1. **Hand Count**: **Strictly 1 hand**. If both hands are in frame, Gojo immediately drops to 0% to prevent misfires.
+2. **Finger Crossing**: Fully extend your index and middle fingers. Cross the **middle finger diagonally over the front of the index finger** (crossing ratio $< 0.44$).
+3. **Curled Fingers**: Tightly fold your ring finger and pinky into your palm ($> 0.65$ curl ratio).
+4. **Thumb**: Fold your thumb securely against your curled fingers / palm base.
+5. **Orientation**: Keep your hand upright with fingers pointing straight up.
+6. 💡 **Pro-Tip**: Hold your hand steadily in front of your lower face or upper chest facing the camera.
+
+#### 🩸 Ryomen Sukuna — Malevolent Shrine (`伏魔御廚子`)
+1. **Hand Count**: **Strictly 2 hands** brought together in front of your chest or chin. (A single hand will always evaluate to 0%).
+2. **Index Fingertip Contact**: Point both index fingers upward and touch the **fingertips directly together tip-to-tip**.
+3. **Upright Thumbs**: Extend both thumbs pointing upward, aligned parallel to each other.
+4. **Curled Lower Fingers**: Middle, ring, and pinky fingers are curled inward, interlocking towards the palms.
+5. **Palm Proximity**: Wrists and palms clasped in close contact.
+6. 💡 **Pro-Tip**: Keep both hands visible in the frame and ensure index fingertips stay firmly touching.
 
 ```
                        [ INPUT HAND LANDMARKS ]
@@ -184,6 +214,35 @@ python web_app.py --port 8080
 
 ---
 
+## 🐳 Cloud & Container Deployment
+
+DomainVision can be deployed locally, containerized with Docker, or hosted on cloud platforms:
+
+### 1. Docker Container
+The included `Dockerfile` packages all necessary Linux C++ shared libraries (`libGL`, `libglib`, `libgomp`, `libportaudio`, `alsa-utils`) automatically:
+
+```bash
+# Build the Docker image
+docker build -t domainvision .
+
+# Run the web server on port 8080
+docker run -p 8080:8080 domainvision
+```
+Then open `http://localhost:8080` in your web browser.
+
+### 2. Cloud Platforms (Railway, Render, Hugging Face Spaces)
+Because DomainVision is a real-time computer vision engine performing 60–80 FPS video streaming and physical particle simulations, it requires persistent container hosting:
+- **[Railway.app](https://railway.app/)**: Connect this GitHub repository and deploy with Docker.
+- **[Render.com](https://render.com/)**: Create a new Web Service pointing to your repository with the Docker runtime.
+- **[Hugging Face Spaces](https://huggingface.co/spaces)**: Create a new Space using the Docker SDK.
+
+> [!NOTE]
+> **Can I deploy on Vercel?**
+> Vercel's serverless functions are ephemeral with a strict 250MB package limit and lack system C++ libraries (`libGL`), which conflicts with persistent OpenCV/MediaPipe streaming loops.
+> If you want to use Vercel, host your **static frontend on Vercel** and proxy or stream camera frames to a persistent **Railway / Render backend**, or compile detection into client-side browser WebAssembly (MediaPipe.js).
+
+---
+
 ## 📐 Calibration & Debugging
 
 DomainVision includes dedicated diagnostic and calibration tools:
@@ -208,10 +267,23 @@ python main.py --log-gestures
 ```
 Logs structured JSONL entries to `logs/gesture_samples.jsonl` with timestamps, joint angles, curl ratios, and confidence scores.
 
-### Automated Unit Tests
-Validate gesture classifier rules and transitions against synthetic landmark test cases:
+### Automated Unit Tests (20/20 Passing)
+Validate gesture classifier rules, synthetic landmarks, and reference photo recognition:
 ```bash
 python -m unittest tests/test_gestures.py
+```
+
+### Continuous Reference Symbol Stream Testing
+Test canonical anime reference symbols continuously through the full vision pipeline for 15 consecutive frames at ~80 FPS:
+```bash
+python run_continuous_symbol_test.py
+```
+Validates candidate transitions (`CANDIDATE` $\to$ `CONFIRMED`), state hold confirmation, domain triggers, and ensures 100% mutual exclusivity (0% cross-detection).
+
+### Standalone Reference Photo Evaluation
+Score single-frame gesture metrics directly against the reference images:
+```bash
+python test_reference_photos.py
 ```
 
 ### Profiler Benchmark Tool
@@ -247,45 +319,53 @@ python utils/profiler_benchmark.py --frames 60 --width 640 --height 360
 
 ```
 DomainVision/
-├── main.py                     # Main application, state machine, and HUD
-├── config.py                   # Canonical timelines, color themes, and thresholds
-├── web_app.py                  # HTTP streamer with WebRTC/PiP and telemetry headers
-├── requirements.txt            # Python dependencies
-├── PERFORMANCE_BASELINE.md     # Measured stage benchmarks and latency analysis
+├── main.py                         # Main application, state machine, and HUD
+├── config.py                       # Canonical timelines, color themes, and thresholds
+├── web_app.py                      # HTTP streamer with WebRTC/PiP and telemetry headers
+├── run_continuous_symbol_test.py   # Multi-frame continuous streaming symbol validator
+├── test_reference_photos.py        # Reference image scoring and evaluation tool
+├── Dockerfile                      # Production container spec for cloud/container hosts
+├── requirements.txt                # Python dependencies
+├── PERFORMANCE_BASELINE.md         # Measured stage benchmarks and latency analysis
+│
+├── test_images/
+│   ├── gojo_reference.png          # Canonical Gojo Taishakuten Mudra reference photo
+│   └── sukuna_reference.png        # Canonical Sukuna Enma-ten Mudra reference photo
 │
 ├── tracking/
-│   ├── detector.py             # Asynchronous MediaPipe tracker (hands + segmentation)
-│   ├── hand_tracker.py         # Invariant palm coordinate frames & 3D kinematic metrics
-│   └── gesture_recognizer.py   # Multi-class state machine (Sukuna / Gojo / Unknown)
+│   ├── detector.py                 # Asynchronous MediaPipe tracker (hands + segmentation)
+│   ├── reference_detector.py       # pHash & ORB canonical symbol detector
+│   ├── hand_tracker.py             # Invariant palm coordinate frames & 3D kinematic metrics
+│   └── gesture_recognizer.py       # Multi-class state machine (Sukuna / Gojo / Unknown)
 │
 ├── effects/
-│   ├── domain_layers.py        # 2.5D parallax background rendering (Shrine / Void)
-│   ├── aura.py                 # Edge-aware 3-layer cursed aura compositing
-│   ├── cursed_energy.py        # Perspective-anchored joint filaments & fingertip lightning
-│   ├── particles.py            # Physics particle system (floating motes, vortex suction)
-│   ├── flash.py                # Blinding cursed energy screen flash transition
-│   ├── shockwave.py            # Expanding refractive barrier shockwave rings
-│   ├── distortion.py           # Optical screen shake and chromatic displacement
-│   └── color_grade.py          # SIMD bloom, vignette, and film grain
+│   ├── domain_layers.py            # 2.5D parallax background rendering (Shrine / Void)
+│   ├── aura.py                     # Edge-aware 3-layer cursed aura compositing
+│   ├── cursed_energy.py            # Perspective-anchored joint filaments & fingertip lightning
+│   ├── particles.py                # Physics particle system (floating motes, vortex suction)
+│   ├── flash.py                    # Blinding cursed energy screen flash transition
+│   ├── shockwave.py                # Expanding refractive barrier shockwave rings
+│   ├── distortion.py               # Optical screen shake and chromatic displacement
+│   └── color_grade.py              # SIMD bloom, vignette, and film grain
 │
 ├── utils/
-│   ├── profiler_benchmark.py   # Multi-stage latency benchmark tool
-│   ├── motion_estimator.py     # Decimated optical flow camera motion tracker
-│   ├── quality_controller.py   # Dynamic performance scaler & load balancer
-│   ├── demo_feed.py            # State-aware animated character demonstration camera
-│   └── fps.py                  # Performance profiler with smoothed metrics
+│   ├── profiler_benchmark.py       # Multi-stage latency benchmark tool
+│   ├── motion_estimator.py         # Decimated optical flow camera motion tracker
+│   ├── quality_controller.py       # Dynamic performance scaler & load balancer
+│   ├── demo_feed.py                # State-aware animated character demonstration camera
+│   └── fps.py                      # Performance profiler with smoothed metrics
 │
 ├── audio/
-│   └── audio_manager.py        # Queued non-blocking audio engine (aplay, pw-play)
+│   └── audio_manager.py            # Queued non-blocking audio engine (aplay, pw-play)
 │
 ├── tests/
-│   └── test_gestures.py        # Unit test suite for multi-class mudra classification
+│   └── test_gestures.py            # 20-test unit test suite for multi-class classification
 │
 └── assets/
-    ├── shrine.png              # Malevolent Shrine backdrop
-    ├── void.png                # Infinite Void cosmic singularity backdrop
-    ├── models/                 # MediaPipe task models (segmenter, hand_landmarker)
-    └── sounds/                 # Canonical 16-bit PCM procedural audio cues
+    ├── shrine.png                  # Malevolent Shrine backdrop
+    ├── void.png                    # Infinite Void cosmic singularity backdrop
+    ├── models/                     # MediaPipe task models (segmenter, hand_landmarker)
+    └── sounds/                     # Canonical 16-bit PCM procedural audio cues
 ```
 
 ---
