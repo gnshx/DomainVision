@@ -119,6 +119,7 @@ class DomainExpansionApp:
         self.record_path = record_path
         self.max_frames = max_frames
         self.show_hud = True
+        self.hud_position = "right"  # "right", "left", or "none"
         self.show_landmarks = True
         self.calibrate_mode = calibrate_mode
         self.show_calibration = calibrate_mode
@@ -812,73 +813,87 @@ class DomainExpansionApp:
         hands: Optional[List[Dict[str, Any]]] = None,
         q_level: str = "HIGH",
     ):
-        """Renders cyber/curse telemetry HUD with crystal-clear visibility and dual mudra meters."""
+        """Renders cyber/curse telemetry HUD positioned on the side to keep face 100% visible."""
+        pos = getattr(self, "hud_position", "right")
+        if pos == "none" or not self.show_hud:
+            return
+
         h, w = frame.shape[:2]
-        hud_w, hud_h = 410, 165
+        hud_w, hud_h = 190, 172
 
-        roi = frame[16:16 + hud_h, 16:16 + hud_w]
+        # Side position: 'right' (default) or 'left'
+        if pos == "right":
+            x0 = w - hud_w - 12
+            y0 = 36  # Docked on right side, below top-right pill
+        else:
+            x0 = 12
+            y0 = 36  # Docked on left side, below top-left pill
+
+        x0 = max(0, min(w - hud_w, x0))
+        y0 = max(0, min(h - hud_h, y0))
+
+        roi = frame[y0:y0 + hud_h, x0:x0 + hud_w]
         dark_card = np.full_like(roi, (12, 8, 18))
-        cv2.addWeighted(dark_card, 0.90, roi, 0.10, 0, roi)
-        cv2.rectangle(frame, (16, 16), (16 + hud_w, 16 + hud_h), (0, 230, 255), 1)
+        cv2.addWeighted(dark_card, 0.88, roi, 0.12, 0, roi)
+        cv2.rectangle(frame, (x0, y0), (x0 + hud_w, y0 + hud_h), (0, 230, 255), 1)
 
-        # Status & Domain
-        status_color = (80, 255, 120) if self.state == "DOMAIN_ACTIVE" else ((80, 230, 255) if self.state == "CHARGING" else (240, 240, 240))
-        g_state = gesture_info.get("state", "UNKNOWN")
-        cv2.putText(frame, f"STATUS: {self.state}  |  GESTURE: {g_state}", (26, 38),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.44, status_color, 1, cv2.LINE_AA)
-        cv2.putText(frame, f"DOMAIN: {self.env_renderer.theme['name_en']} ({self.env_renderer.theme['character']})",
-                    (26, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (215, 195, 255), 1, cv2.LINE_AA)
+        # 1. State & Active Theme
+        state_col = (80, 255, 120) if self.state == "DOMAIN_ACTIVE" else ((80, 230, 255) if self.state == "CHARGING" else (210, 210, 220))
+        cv2.putText(frame, f"STATE: {self.state}", (x0 + 8, y0 + 16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.34, state_col, 1, cv2.LINE_AA)
 
-        # Mudra Meters (Dual Sukuna & Gojo Meters)
+        theme_title = "SUKUNA" if "shrine" in self.theme_name.lower() else "GOJO"
+        cv2.putText(frame, f"THEME: {theme_title}", (x0 + 8, y0 + 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.32, (215, 195, 255), 1, cv2.LINE_AA)
+
+        # 2. Sukuna Mudra Match Meter
         sukuna_pct = int(gesture_info.get("sukuna_score", 0.0) * 100)
-        gojo_pct = int(gesture_info.get("gojo_score", 0.0) * 100)
-        hands_cnt = len(hands) if hands else 0
-
-        # Sukuna Meter Bar
-        cv2.putText(frame, f"Sukuna: {sukuna_pct}%", (26, 76), cv2.FONT_HERSHEY_SIMPLEX, 0.34,
-                    (80, 255, 120) if sukuna_pct >= 72 else (180, 180, 190), 1, cv2.LINE_AA)
-        cv2.rectangle(frame, (115, 68), (225, 78), (35, 24, 46), -1)
-        s_fill = int(110 * (sukuna_pct / 100.0))
+        s_col = (80, 255, 120) if sukuna_pct >= 72 else (180, 180, 190)
+        cv2.putText(frame, f"Sukuna (2H): {sukuna_pct}%", (x0 + 8, y0 + 47),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.32, s_col, 1, cv2.LINE_AA)
+        bar_w = hud_w - 16
+        cv2.rectangle(frame, (x0 + 8, y0 + 51), (x0 + 8 + bar_w, y0 + 58), (35, 24, 46), -1)
+        s_fill = int(bar_w * (sukuna_pct / 100.0))
         if s_fill > 0:
-            cv2.rectangle(frame, (115, 68), (115 + s_fill, 78), (80, 220, 255) if sukuna_pct < 72 else (80, 255, 120), -1)
+            cv2.rectangle(frame, (x0 + 8, y0 + 51), (x0 + 8 + s_fill, y0 + 58),
+                          (80, 220, 255) if sukuna_pct < 72 else (80, 255, 120), -1)
 
-        # Gojo Meter Bar
-        cv2.putText(frame, f"Gojo: {gojo_pct}%", (240, 76), cv2.FONT_HERSHEY_SIMPLEX, 0.34,
-                    (80, 255, 120) if gojo_pct >= 72 else (180, 180, 190), 1, cv2.LINE_AA)
-        cv2.rectangle(frame, (315, 68), (410, 78), (35, 24, 46), -1)
-        g_fill = int(95 * (gojo_pct / 100.0))
+        # 3. Gojo Mudra Match Meter
+        gojo_pct = int(gesture_info.get("gojo_score", 0.0) * 100)
+        g_col = (80, 255, 120) if gojo_pct >= 72 else (180, 180, 190)
+        cv2.putText(frame, f"Gojo (1H): {gojo_pct}%", (x0 + 8, y0 + 73),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.32, g_col, 1, cv2.LINE_AA)
+        cv2.rectangle(frame, (x0 + 8, y0 + 77), (x0 + 8 + bar_w, y0 + 84), (35, 24, 46), -1)
+        g_fill = int(bar_w * (gojo_pct / 100.0))
         if g_fill > 0:
-            cv2.rectangle(frame, (315, 68), (315 + g_fill, 78), (255, 100, 220) if gojo_pct < 72 else (80, 255, 120), -1)
+            cv2.rectangle(frame, (x0 + 8, y0 + 77), (x0 + 8 + g_fill, y0 + 84),
+                          (255, 100, 220) if gojo_pct < 72 else (80, 255, 120), -1)
 
-        # Mudra Recognition Feedback
-        status_text = gesture_info.get("status_text", "Make hand sign (Sukuna or Gojo)")
-        cv2.putText(frame, f"MUDRA : {status_text}", (26, 100),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 230, 255), 1, cv2.LINE_AA)
+        # 4. Hold Progress Meter
+        hold_prog = gesture_info.get("hold_progress", 0.0)
+        hold_txt = f"HOLD: {int(hold_prog * 100)}%" if hold_prog > 0 else "HOLD: READY"
+        cv2.putText(frame, hold_txt, (x0 + 8, y0 + 99),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.32, (0, 230, 255), 1, cv2.LINE_AA)
+        cv2.rectangle(frame, (x0 + 8, y0 + 103), (x0 + 8 + bar_w, y0 + 110), (35, 24, 46), -1)
+        h_fill = int(bar_w * hold_prog)
+        if h_fill > 0:
+            cv2.rectangle(frame, (x0 + 8, y0 + 103), (x0 + 8 + h_fill, y0 + 110),
+                          (80, 235, 255) if hold_prog < 1.0 else (80, 255, 120), -1)
 
-        # Hold Progress Bar
-        bar_bg_w = hud_w - 20
-        cv2.rectangle(frame, (26, 110), (26 + bar_bg_w, 120), (35, 24, 46), -1)
-        fill_w = int(bar_bg_w * gesture_info.get("hold_progress", 0.0))
-        if fill_w > 0:
-            fill_col = (80, 235, 255) if gesture_info["hold_progress"] < 1.0 else (80, 255, 120)
-            cv2.rectangle(frame, (26, 110), (26 + fill_w, 120), fill_col, -1)
+        # 5. Live Gesture Status Text
+        status_text = gesture_info.get("status_text", "")
+        if len(status_text) > 22:
+            status_text = status_text[:20] + ".."
+        cv2.putText(frame, status_text, (x0 + 8, y0 + 125),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.30, (220, 220, 230), 1, cv2.LINE_AA)
 
-        # Telemetry line
-        fps_color = (80, 255, 120) if self.profiler.fps >= 30.0 else ((80, 230, 255) if self.profiler.fps >= 20.0 else (80, 80, 255))
-        q_colors = {"ULTRA": (80, 255, 80), "HIGH": (80, 230, 255), "MEDIUM": (80, 220, 200), "LOW": (80, 80, 255)}
-        q_color = q_colors.get(q_level, (180, 180, 190))
-
-        cv2.putText(frame,
-            f"PERF  : {self.profiler.fps:.1f} FPS  |  Trk: {self.profiler.track_ms:.0f}ms  |  Rdr: {self.profiler.render_ms:.0f}ms",
-            (26, 138), cv2.FONT_HERSHEY_SIMPLEX, 0.34, fps_color, 1, cv2.LINE_AA)
-
-        h_info = f"Hands: {hands_cnt}"
-        if hands:
-            h_info += " (" + ", ".join([h.get("handedness", "?") for h in hands]) + ")"
-        cv2.putText(frame, f"INFO  : {h_info}  |  Qual: {q_level}",
-            (26, 154), cv2.FONT_HERSHEY_SIMPLEX, 0.34, q_color, 1, cv2.LINE_AA)
-
-        self.profiler.draw_telemetry(frame)
+        # 6. Telemetry line
+        hands_cnt = len(hands) if hands else 0
+        fps_color = (80, 255, 120) if self.profiler.fps >= 25.0 else ((80, 230, 255) if self.profiler.fps >= 15.0 else (80, 80, 255))
+        cv2.putText(frame, f"FPS: {self.profiler.fps:.1f} | Hands: {hands_cnt}", (x0 + 8, y0 + 145),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.32, fps_color, 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Trk: {self.profiler.track_ms:.0f}ms | Rdr: {self.profiler.render_ms:.0f}ms",
+                    (x0 + 8, y0 + 161), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (170, 170, 180), 1, cv2.LINE_AA)
 
     def run(self):
         print("\n=======================================================")
@@ -941,7 +956,12 @@ class DomainExpansionApp:
                     elif key == ord("2"):
                         self.set_theme("infinite_void")
                     elif key in [ord("h"), ord("H")]:
-                        self.show_hud = not self.show_hud
+                        positions = ["right", "left", "none"]
+                        cur = getattr(self, "hud_position", "right")
+                        idx = positions.index(cur) if cur in positions else 0
+                        self.hud_position = positions[(idx + 1) % len(positions)]
+                        self.show_hud = (self.hud_position != "none")
+                        print(f"HUD Position: {self.hud_position.upper()}")
                     elif key in [ord("s"), ord("S")]:
                         ss_name = f"domain_screenshot_{int(time.time())}.png"
                         cv2.imwrite(ss_name, output_frame)

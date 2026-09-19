@@ -45,6 +45,12 @@ class CursedARWebServer:
             new_val = not getattr(self.app, "show_calibration", False)
             self.app.show_calibration = new_val
             self.app.calibrate_mode = new_val
+        elif action == "toggle_hud":
+            positions = ["right", "left", "none"]
+            cur = getattr(self.app, "hud_position", "right")
+            idx = positions.index(cur) if cur in positions else 0
+            self.app.hud_position = positions[(idx + 1) % len(positions)]
+            self.app.show_hud = (self.app.hud_position != "none")
 
     def process_image(self, input_bgr: np.ndarray, action: str = "") -> np.ndarray:
         with self.lock:
@@ -484,6 +490,7 @@ class ARStreamHandler(BaseHTTPRequestHandler):
             <button class="btn" style="background: rgba(120, 40, 200, 0.4); border-color: #c77dff;" onclick="triggerAction('theme_gojo')">🌌 Gojo</button>
             <button class="btn" id="btn-skeleton" onclick="triggerAction('toggle_landmarks')">🦴 Skeleton</button>
             <button class="btn" id="btn-calibration" onclick="triggerAction('toggle_calibration')">📐 Calibration</button>
+            <button class="btn" id="btn-hud" onclick="triggerAction('toggle_hud')">🪟 Shift HUD</button>
             <button class="btn" onclick="saveSnapshot()">📸 Snapshot</button>
         </div>
 
