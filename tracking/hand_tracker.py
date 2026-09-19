@@ -258,9 +258,7 @@ class AdvancedHandTracker:
         mid_active = finger_states["middle"] in ["EXTENDED", "BENT"]
 
         is_crossing_mudra = (
-            (seg_intersect and idx_active and mid_active) or
-            (is_crossed_swap and cross_ratio < 0.52 and idx_active and mid_active) or
-            (cross_ratio < 0.38 and idx_active and mid_active)
+            (seg_intersect or is_crossed_swap) and cross_ratio < 0.52 and idx_active and mid_active
         )
 
         # Bounding Box
@@ -287,6 +285,8 @@ class AdvancedHandTracker:
             "curl_ratios": curl_ratios,
             "cross_ratio": cross_ratio,
             "is_crossing_mudra": is_crossing_mudra,
+            "is_crossed_swap": is_crossed_swap,
+            "seg_intersect": seg_intersect,
             "thumb_tucked": thumb_tucked,
             "handedness": handedness,
             "handedness_conf": handedness_conf,

@@ -95,8 +95,10 @@ class CanonicalGestureRecognizer:
         # Rule 2: 2 fingers crossed check (middle finger crossed over index finger)
         cross_ratio = h.get("cross_ratio", 1.0)
         is_crossing = h.get("is_crossing_mudra", False)
+        is_crossed_swap = h.get("is_crossed_swap", False)
 
-        if not is_crossing and cross_ratio >= 0.44:
+        # Must genuinely cross! Either segments intersect or transverse positions swapped
+        if not is_crossing and not (is_crossed_swap and cross_ratio < 0.44):
             return 0.0, None, {"reason": "fingers_not_crossed", "cross_ratio": cross_ratio}
 
         # Rule 4: Index & Middle fingers upright
@@ -120,10 +122,16 @@ class CanonicalGestureRecognizer:
         if dir_y > -0.15:
             return 0.0, None, {"reason": "hand_pointing_downwards", "dir_y": dir_y}
 
-        # Rule 7: Thumb check (thumb folded inward, not upright)
+        # Rule 7: Thumb check (thumb folded inward, strictly NOT upright or extended)
         thumb_tucked = h.get("thumb_tucked", False) or (fa.get("thumb", 180) < 135)
-        if not thumb_tucked and fa.get("thumb", 180) > 142:
-            return 0.0, None, {"reason": "thumb_extended_not_tucked"}
+        thumb_state = fs.get("thumb", "UNKNOWN")
+        if (thumb_state == "EXTENDED" and not thumb_tucked) or fa.get("thumb", 180) > 140:
+            return 0.0, None, {"reason": "thumb_extended_not_tucked", "thumb_state": thumb_state}
+
+        # Rule 8: Canonical eye/face/head height for live webcam hands (never down at torso/chest)
+        is_ref = h.get("is_reference", False)
+        if not is_ref and palm_y_norm > 0.60:
+            return 0.0, None, {"reason": "hand_at_torso_level_for_gojo", "palm_y_norm": palm_y_norm}
 
         cross_quality = 1.0 if (is_crossing and cross_ratio < 0.36) else 0.88
         curl_quality = 1.0 if (r_cur and p_cur) else 0.85

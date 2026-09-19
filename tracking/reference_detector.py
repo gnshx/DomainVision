@@ -146,6 +146,7 @@ class ReferenceSymbolDetector:
             handedness="Right",
             handedness_conf=0.99,
         )
+        hand_dict["is_reference"] = True
         return [hand_dict]
 
     def _generate_sukuna_hands(self, frame_shape: Tuple[int, int], bbox: Tuple[int, int, int, int]) -> List[Dict[str, Any]]:
@@ -183,5 +184,6 @@ class ReferenceSymbolDetector:
 
         h1 = self.analyzer.analyze_hand(raw_lms1, frame_shape, hand_idx=0, handedness="Left", handedness_conf=0.99)
         h2 = self.analyzer.analyze_hand(raw_lms2, frame_shape, hand_idx=1, handedness="Right", handedness_conf=0.99)
-
+        h1["is_reference"] = True
+        h2["is_reference"] = True
         return [h1, h2]

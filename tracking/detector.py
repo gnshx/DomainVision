@@ -93,9 +93,9 @@ class MediaPipeVisionTracker:
                 hand_opts = vision.HandLandmarkerOptions(
                     base_options=BaseOptions(model_asset_path=hand_path),
                     num_hands=2,
-                    min_hand_detection_confidence=0.28,
-                    min_hand_presence_confidence=0.25,
-                    min_tracking_confidence=0.25,
+                    min_hand_detection_confidence=0.22,
+                    min_hand_presence_confidence=0.20,
+                    min_tracking_confidence=0.20,
                 )
                 try:
                     self.hand_landmarker = vision.HandLandmarker.create_from_options(hand_opts)
