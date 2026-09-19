@@ -81,7 +81,11 @@ class MediaPipeVisionTracker:
                     base_options=BaseOptions(model_asset_path=seg_path),
                     output_confidence_masks=True
                 )
-                self.segmenter = vision.ImageSegmenter.create_from_options(options)
+                try:
+                    self.segmenter = vision.ImageSegmenter.create_from_options(options)
+                except Exception as e:
+                    print(f"[MediaPipe Vision Tracker] Warning: Segmenter failed to load ({e}). Continuing with hands-only tracking.")
+                    self.segmenter = None
 
         if enable_hands:
             hand_path = os.path.join(self.models_dir, "hand_landmarker.task")
@@ -93,7 +97,11 @@ class MediaPipeVisionTracker:
                     min_hand_presence_confidence=0.25,
                     min_tracking_confidence=0.25,
                 )
-                self.hand_landmarker = vision.HandLandmarker.create_from_options(hand_opts)
+                try:
+                    self.hand_landmarker = vision.HandLandmarker.create_from_options(hand_opts)
+                except Exception as e:
+                    print(f"[MediaPipe Vision Tracker] Warning: Hand landmarker failed to load ({e}).")
+                    self.hand_landmarker = None
 
         if enable_pose:
             pose_path = os.path.join(self.models_dir, "pose_landmarker.task")
@@ -104,7 +112,11 @@ class MediaPipeVisionTracker:
                     min_pose_presence_confidence=0.4,
                     min_tracking_confidence=0.4,
                 )
-                self.pose_landmarker = vision.PoseLandmarker.create_from_options(pose_opts)
+                try:
+                    self.pose_landmarker = vision.PoseLandmarker.create_from_options(pose_opts)
+                except Exception as e:
+                    print(f"[MediaPipe Vision Tracker] Warning: Pose landmarker failed to load ({e}).")
+                    self.pose_landmarker = None
 
     def _start_worker(self):
         self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)

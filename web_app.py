@@ -829,7 +829,8 @@ class ARStreamHandler(BaseHTTPRequestHandler):
 def main():
     global SERVER_INSTANCE
     parser = argparse.ArgumentParser(description="DomainVision Web Streamer")
-    parser.add_argument("--port", type=int, default=8080, help="Port (default: 8080)")
+    default_port = int(os.environ.get("PORT", 8080))
+    parser.add_argument("--port", type=int, default=default_port, help=f"Port (default: {default_port})")
     parser.add_argument("--width", type=int, default=640, help="Processing width (default: 640)")
     parser.add_argument("--height", type=int, default=360, help="Processing height (default: 360)")
     args = parser.parse_args()
