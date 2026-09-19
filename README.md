@@ -9,10 +9,13 @@
 [![Benchmarks](https://img.shields.io/badge/Benchmark-35.8%20FPS%20Sync%20%7C%2050%2B%20FPS%20Decoupled-00C853.svg)](PERFORMANCE_BASELINE.md)
 [![Tests](https://img.shields.io/badge/Tests-Passing%20(20%2F20)-brightgreen.svg)](tests/test_gestures.py)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-domainvision.onrender.com-blueviolet?style=flat-square&logo=render)](https://domainvision.onrender.com/)
 
 *An authentic, cinematic **Jujutsu Kaisen**-inspired Domain Expansion AR pipeline featuring invariant multi-class hand-sign recognition, SIMD-accelerated effects, neural selfie segmentation, and canonical audio synchronization.*
 
-[Key Features](#-key-features) • [Visual Mudra Guide](#-canonical-mudra-recognition) • [Continuous Testing](#-continuous-reference-symbol-stream-testing) • [System Architecture](#-system-architecture) • [Quickstart](#-quickstart) • [Deployment](#-cloud--container-deployment) • [Web Application](#-web-application--remote-ssh) • [Calibration & Debugging](#-calibration--debugging) • [Controls](#-interactive-controls)
+👉 **Live Web Application**: **[https://domainvision.onrender.com/](https://domainvision.onrender.com/)**
+
+[Live Demo](https://domainvision.onrender.com/) • [Key Features](#-key-features) • [Visual Mudra Guide](#-canonical-mudra-recognition) • [Continuous Testing](#-continuous-reference-symbol-stream-testing) • [System Architecture](#-system-architecture) • [Quickstart](#-quickstart) • [Deployment](#-cloud--container-deployment) • [Web Application](#-web-application--remote-ssh) • [Calibration & Debugging](#-calibration--debugging) • [Controls](#-interactive-controls)
 
 ---
 
@@ -233,7 +236,8 @@ Then open `http://localhost:8080` in your web browser.
 ### 2. Cloud Platforms (Railway, Render, Hugging Face Spaces)
 Because DomainVision is a real-time computer vision engine performing 60–80 FPS video streaming and physical particle simulations, it requires persistent container hosting:
 - **[Railway.app](https://railway.app/)**: Connect this GitHub repository and deploy with Docker.
-- **[Render.com](https://render.com/)**: Create a new Web Service pointing to your repository with the Docker runtime.
+- **[Render.com](https://render.com/)**: Create a new Web Service pointing to your repository with the Docker runtime.  
+  *(Live deployment: [https://domainvision.onrender.com/](https://domainvision.onrender.com/))*
 - **[Hugging Face Spaces](https://huggingface.co/spaces)**: Create a new Space using the Docker SDK.
 
 > [!NOTE]

@@ -625,7 +625,7 @@ class ARStreamHandler(BaseHTTPRequestHandler):
                     let response;
                     if (mode === 'webcam' && video.readyState >= 2) {
                         offCtx.drawImage(video, 0, 0, 640, 360);
-                        const blob = await new Promise(resolve => offCanvas.toBlob(resolve, 'image/jpeg', 0.85));
+                        const blob = await new Promise(resolve => offCanvas.toBlob(resolve, 'image/jpeg', 0.65));
 
                         response = await fetch(`/api/process_frame?action=${act}`, {
                             method: 'POST',
@@ -638,7 +638,7 @@ class ARStreamHandler(BaseHTTPRequestHandler):
                         // Send webcam frame so user's real fingers are tracked to trigger expansion!
                         const srcVid = pipVideo.readyState >= 2 ? pipVideo : video;
                         offCtx.drawImage(srcVid, 0, 0, 640, 360);
-                        const blob = await new Promise(resolve => offCanvas.toBlob(resolve, 'image/jpeg', 0.85));
+                        const blob = await new Promise(resolve => offCanvas.toBlob(resolve, 'image/jpeg', 0.65));
 
                         response = await fetch(`/api/demo_frame?action=${act}`, {
                             method: 'POST',
@@ -741,7 +741,7 @@ class ARStreamHandler(BaseHTTPRequestHandler):
             action = params.get("action", [""])[0]
             try:
                 out_frame = SERVER_INSTANCE.process_demo_frame(action=action)
-                ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
 
                 if ret:
                     self.send_response(200)
@@ -782,7 +782,7 @@ class ARStreamHandler(BaseHTTPRequestHandler):
             action = params.get("action", [""])[0]
             try:
                 out_frame = SERVER_INSTANCE.process_image(input_bgr, action=action)
-                ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
                 if ret:
                     self.send_response(200)
                     self.send_header("Content-Type", "image/jpeg")
@@ -808,7 +808,7 @@ class ARStreamHandler(BaseHTTPRequestHandler):
             action = params.get("action", [""])[0]
             try:
                 out_frame = SERVER_INSTANCE.process_demo_frame(user_cam_bgr=user_cam_bgr, action=action)
-                ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                ret, buf = cv2.imencode(".jpg", out_frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
                 if ret:
                     self.send_response(200)
                     self.send_header("Content-Type", "image/jpeg")

@@ -143,11 +143,13 @@ class DomainExpansionApp:
 
         # Decoupled Asynchronous Tracking Layer
         print("Initializing MediaPipe Asynchronous Vision Tracker...")
+        seg_int = int(os.environ.get("SEG_INTERVAL", "5" if self.headless else str(SEGMENTATION_INTERVAL)))
         self.tracker = MediaPipeVisionTracker(
             enable_segmenter=True,
             enable_hands=True,
             enable_pose=False,   # Disabled for maximum framerate
             async_mode=True,  # Fully asynchronous decoupled tracking for 30+ FPS
+            seg_interval=seg_int,
         )
         self.gesture_recognizer = CanonicalGestureRecognizer(
             hold_frames_required=SIGN_HOLD_FRAMES_REQUIRED,
